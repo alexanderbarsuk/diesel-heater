@@ -27,7 +27,7 @@ static uint32_t utf8Decode(const char** p) {
 
 // ─── Unicode → Ukrainian13pt font position ───────────────────────────────────
 // Layout: 0x20-0x7E ASCII | 0x80-0x9F А-Я | 0xA0-0xBF а-я
-//         0xC0 Є  0xC1 є  0xC2 Ї  0xC3 ї  0xC4 І  0xC5 і  0xC6 Ґ  0xC7 ґ
+//         0xC0 Є  0xC1 є  0xC2 Ї  0xC3 ї  0xC4 І  0xC5 і  0xC6 Ґ  0xC7 ґ  0xC8 °
 static uint8_t cpToFont(uint32_t cp) {
   if (cp >= 0x0020 && cp <= 0x007E) return (uint8_t)cp;
   if (cp >= 0x0410 && cp <= 0x042F) return 0x80 + (uint8_t)(cp - 0x0410);
@@ -63,7 +63,6 @@ static uint16_t blend565(uint16_t bg, uint16_t fg, uint8_t level) {
 // ─── 2-bit AA glyph renderer ──────────────────────────────────────────────────
 // Reads glyph metadata from Ukrainian13ptGlyphs (PROGMEM GFXglyph structs) and
 // 2-bit packed pixel data from Ukrainian13ptBitmaps. 4 pixels per byte, MSB-first.
-// Skips level-0 pixels (transparent); blends levels 1 and 2; writes level 3 as fg.
 static void drawGlyphAA(uint8_t fontChar, int16_t cx, int16_t baseline,
                          uint16_t fg, uint16_t bg) {
   if (fontChar < 0x20 || fontChar > 0xC8) return;
@@ -76,11 +75,11 @@ static void drawGlyphAA(uint8_t fontChar, int16_t cx, int16_t baseline,
 
   if (w == 0 || h == 0) return;
 
-  int16_t  x0 = cx + xo;
-  int16_t  y0 = baseline + yo;
+  int16_t x0 = cx + xo;
+  int16_t y0 = baseline + yo;
 
   tft.startWrite();
-  uint16_t pi = 0;  // pixel index within this glyph
+  uint16_t pi = 0;
   for (uint8_t row = 0; row < h; row++) {
     for (uint8_t col = 0; col < w; col++) {
       uint8_t shift = 6 - ((pi & 3) << 1);
@@ -96,8 +95,7 @@ static void drawGlyphAA(uint8_t fontChar, int16_t cx, int16_t baseline,
 
 // ─── printUA ─────────────────────────────────────────────────────────────────
 // Draws a UTF-8 string at the current cursor (= baseline) using 2-bit AA.
-// Each UA_ADVANCE-wide cell is erased with 'bg' before drawing the glyph,
-// giving flicker-free updates without Adafruit GFX background colour support.
+// Each UA_ADVANCE-wide cell is erased with 'bg' before drawing the glyph.
 void printUA(const char* str, uint16_t fg, uint16_t bg) {
   int16_t baseline = tft.getCursorY();
   int16_t top      = baseline - UA_ASCENT;
@@ -105,6 +103,31 @@ void printUA(const char* str, uint16_t fg, uint16_t bg) {
   while (*str) {
     uint32_t cp = utf8Decode(&str);
     if (!cp) break;
+    int16_t cx = tft.getCursorX();
+    tft.fillRect(cx, top, UA_ADVANCE, UA_ASCENT + UA_DESCENT + 1, bg);
+    if (cp != 0x20) {
+      drawGlyphAA(cpToFont(cp), cx, baseline, fg, bg);
+    }
+    tft.setCursor(cx + UA_ADVANCE, baseline);
+  }
+}
+
+// ─── printUAn ────────────────────────────────────────────────────────────────
+// Draws exactly n codepoints from str starting at codepoint offset skip.
+// Pads with spaces if the string has fewer than skip+n codepoints.
+void printUAn(const char* str, uint8_t skip, uint8_t n, uint16_t fg, uint16_t bg) {
+  int16_t baseline = tft.getCursorY();
+  int16_t top      = baseline - UA_ASCENT;
+
+  // Skip the first 'skip' codepoints
+  while (skip > 0 && *str) {
+    utf8Decode(&str);
+    skip--;
+  }
+
+  // Draw exactly 'n' codepoints (pad with spaces if string is exhausted)
+  for (uint8_t i = 0; i < n; i++) {
+    uint32_t cp = *str ? utf8Decode(&str) : 0x20;
     int16_t cx = tft.getCursorX();
     tft.fillRect(cx, top, UA_ADVANCE, UA_ASCENT + UA_DESCENT + 1, bg);
     if (cp != 0x20) {

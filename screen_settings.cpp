@@ -43,61 +43,74 @@ struct MenuItem {
 static const char UNITS_C[]   = "\xC2\xB0""C";              // °C  (2 CP)
 static const char UNITS_PCT[] = "%";
 static const char UNITS_HPA[] = "\xD0\xB3\xD0\x9F\xD0\xB0"; // гПа (3 CP)
+static const char UNITS_ML[] = "мл/г"; 
+static const char UNITS_V[] = "В"; 
+static const char UNITS_A[] = ""; 
 
 // ─── Опції для ITEM_SELECT ───────────────────────────────────────────────────
-static const char* modeOpts[]  = { "Авто  ", "Нагрів", "Вент  " };
-static const char* resetOpts[] = { "Ні ", "Так" };
+static const char* modeOpts[]  = { "Авто ", "Нагрів", "Вентиляція" };
+static const char* resetOpts[] = { "Літо ", "Зима" };
 
 // ─── Підменю "КОРЕКЦІЇ" ───────────────────────────────────────────────────────
 // Для додавання нових підменю: 1) визначте масив MenuItem + SubMenuDef,
 // 2) додайте ITEM_SUBMENU до відповідного меню,
 // 3) додайте &yourSub до allSubMenus[].
+// ─── Підменю "КОРЕКЦІЇ" ──────────────────────────────────────────────────────
+// valIdx 9..11  EEPROM addr 24..28  (2B кожен)
 static const MenuItem corrItems[] = {
-  // label           type       valIdx  addr  min  max  default  units      data
-  { "< Назад   ", ITEM_BACK,   NO_VAL, 0,     0,   0,  0,       nullptr,   nullptr   },
-  { "Корект.тем", ITEM_SLIDER,  14,    32,   -5,   5,  0,       UNITS_C,   nullptr   },
-  { "Корект.вол", ITEM_SLIDER,  15,    34,  -10,  10,  0,       UNITS_PCT, nullptr   },
-  { "Корект.тис", ITEM_SLIDER,  16,    36,  -50,  50,  0,       UNITS_HPA, nullptr   },
+  // label           type        valIdx  addr  min   max  default  units      data
+  { "< Назад   ", ITEM_BACK,    NO_VAL,  0,    0,    0,   0,       nullptr,   nullptr   },
+  { "Корект.тем", ITEM_SLIDER,   9,     24,   -5,    5,   0,       UNITS_C,   nullptr   },
+  { "Корект.вол", ITEM_SLIDER,  10,     26,  -10,   10,   0,       UNITS_PCT, nullptr   },
+  { "Корект.тис", ITEM_SLIDER,  11,     28,  -50,   50,   0,       UNITS_HPA, nullptr   },
 };
 static const SubMenuDef corrSubDef = { "КОРЕКЦІЇ", corrItems, 4 };
 
-// ─── Головне меню (15 пунктів) ───────────────────────────────────────────────
-// valIdx = індекс у values[] (0..16); NO_VAL = без значення (SUBMENU/BACK)
-// EEPROM: 2B на SLIDER/CHECKBOX/SELECT, 4B на TIME/RANGE
-static const MenuItem rootItems[] = {
-  // label           type            valIdx addr  min   max  default                    units       data
-  { "Темп уст. ", ITEM_SLIDER,    0,    0,    5,   99,  22,                            UNITS_C,    nullptr                       },
-  { "Гістерезис", ITEM_SLIDER,    1,    2,    1,   10,   1,                            UNITS_C,    nullptr                       },
-  { "Вент. мін%", ITEM_SLIDER,    2,    4,    0,  100,  20,                            UNITS_PCT,  nullptr                       },
-  { "Режим     ", ITEM_SELECT,    3,    6,    0,    2,   0,                            nullptr,    (const void*)modeOpts          },
-  { "Потуж.нагр", ITEM_SLIDER,    4,    8,    0,  100,  80,                            UNITS_PCT,  nullptr                       },
-  { "Темп нічна", ITEM_SLIDER,    5,   10,    5,   30,  18,                            UNITS_C,    nullptr                       },
-  { "Темп денна", ITEM_SLIDER,    6,   12,    5,   30,  22,                            UNITS_C,    nullptr                       },
-  { "Розклад   ", ITEM_CHECKBOX,  7,   14,    0,    1,   0,                            nullptr,    nullptr                       },
-  { "Яскравість", ITEM_SLIDER,    8,   16,   10,  100, 100,                            UNITS_PCT,  nullptr                       },
-  { "Вент. макс", ITEM_SLIDER,    9,   18,    0,  100, 100,                            UNITS_PCT,  nullptr                       },
-  { "Поч.час   ", ITEM_TIME,     10,   20,    0,    0,  (int32_t)(6UL*3600),           nullptr,    nullptr                       },
-  { "Кін.час   ", ITEM_TIME,     11,   24,    0,    0,  (int32_t)(22UL*3600),          nullptr,    nullptr                       },
-  { "Темп діап ", ITEM_RANGE,    12,   28,    5,   40,  (int32_t)((uint16_t)18|((uint32_t)(uint16_t)25<<16)), UNITS_C, nullptr   },
-  { "Корекції  ", ITEM_SUBMENU, NO_VAL, 0,    0,    0,   0,                            nullptr,    &corrSubDef                   },
-  { "Скид нал. ", ITEM_SELECT,  13,   38,    0,    1,   0,                            nullptr,    (const void*)resetOpts         },
+// ─── Підменю "АВАРІЇ" ────────────────────────────────────────────────────────
+// valIdx 12..15  EEPROM addr 30..36  (2B кожен)
+static const MenuItem dangerItems[] = {
+  // label                       type        valIdx  addr  min   max  default  units   data
+  { "< Назад   ",             ITEM_BACK,    NO_VAL,   0,    0,    0,   0,      nullptr, nullptr },
+  { "Макс темп випуску",      ITEM_SLIDER,  12,      30,  100,  200, 120,      UNITS_C, nullptr },
+  { "Макс темп впуску",       ITEM_SLIDER,  13,      32,    5,   30,  20,      UNITS_C, nullptr },
+  { "Перегрів корпусу",       ITEM_SLIDER,  14,      34,  300,  500, 310,      UNITS_C, nullptr },
+  { "Перегрів вихлопу",       ITEM_SLIDER,  15,      36,  300,  600, 380,      UNITS_C, nullptr },
 };
-#define ROOT_COUNT  15
+static const SubMenuDef dangerSubDef = { "АВАРІЇ", dangerItems, 5 };
 
-// ─── Реєстр усіх підменю (для saveAll/loadAll) ───────────────────────────────
-// Додайте сюди кожен новий SubMenuDef для автоматичного збереження/завантаження.
-static const SubMenuDef* allSubMenus[] = { &corrSubDef };
-#define NUM_SUBMENUS  1
+// ─── Головне меню ────────────────────────────────────────────────────────────
+// valIdx 0..8   EEPROM addr 0..22
+// EEPROM map: 0(2) 2(2) 4(2) 6(4=RANGE) 10(2) 12(2) 14(4=TIME) 18(4=TIME) 22(2)
+static const MenuItem rootItems[] = {
+  // label                      type         valIdx addr  min   max   default                                        units      data
+  { "Температура повітря",  ITEM_SLIDER,    0,   0,   50,  200,  110,                                               UNITS_C,   nullptr               },
+  { "Температура вихлопу",  ITEM_SLIDER,    1,   2,  120,  500,  320,                                               UNITS_C,   nullptr               },
+  { "Витрата пального",     ITEM_SLIDER,    2,   4,  500, 2500, 1300,                                               UNITS_ML,  nullptr               },
+  { "Напруга живлення",     ITEM_RANGE,     3,   6,    8,   30,  (int32_t)((uint16_t)10|((uint32_t)(uint16_t)25<<16)), UNITS_V, nullptr               },
+  { "Макс струм свічки",    ITEM_SLIDER,    4,  10,    5,   30,   15,                                               UNITS_A,   nullptr               },
+  { "Запуск при старті",    ITEM_CHECKBOX,  5,  12,    0,    1,    0,                                               nullptr,   nullptr               },
+  { "Час прокачки",         ITEM_TIME,      6,  14,    0,    0,   10,                                               nullptr,   nullptr               },
+  { "Час роботи свічки",    ITEM_TIME,      7,  18,    0,    0,   60,                                               nullptr,   nullptr               },
+  { "Сезон роботи",         ITEM_SELECT,    8,  22,    0,    1,    0,                                               nullptr,   (const void*)resetOpts},
+  { "Корекції",             ITEM_SUBMENU, NO_VAL, 0,   0,    0,    0,                                               nullptr,   &corrSubDef           },
+  { "Аварії",               ITEM_SUBMENU, NO_VAL, 0,   0,    0,    0,                                               nullptr,   &dangerSubDef         },
+};
+#define ROOT_COUNT  11
 
-#define TOTAL_VALUES   17   // кількість слотів у values[] (valIdx 0..16)
-#define ITEMS_PER_PAGE  4
+// ─── Реєстр підменю (для saveAll/loadAll) ────────────────────────────────────
+static const SubMenuDef* allSubMenus[] = { &corrSubDef, &dangerSubDef };
+#define NUM_SUBMENUS  2
+
+#define TOTAL_VALUES   16   // valIdx 0..15
+#define ITEMS_PER_PAGE  7
 
 #define EEPROM_MAGIC_ADDR  100
-#define EEPROM_MAGIC_VAL   0xA6
+#define EEPROM_MAGIC_VAL   0xA7
 
-// ─── Розмітка рядків (SF Mono 22pt 2-bit AA, UA_ADVANCE=14, UA_ASCENT=21) ────
-#define ROW_Y_START  39
-#define ROW_HEIGHT   44
+// ─── Розмітка рядків (UA_ADVANCE=12, UA_ASCENT=18) ───────────────────────────
+// Row = 4px top + 22px content (ascent+descent+1) + 4px bottom = 30px total
+#define ROW_Y_START  27
+#define ROW_HEIGHT   30
 
 // ─── Поточний стан навігації ─────────────────────────────────────────────────
 struct MenuLevel {
@@ -120,6 +133,17 @@ static bool    editMode     = false;
 static uint8_t editField    = 0;     // TIME: 0=Г 1=Х 2=С; RANGE: 0=lo 1=hi
 static int     lastEncoderPos;
 static bool    lastSW;
+
+// ─── Прокрутка довгих міток ──────────────────────────────────────────────────
+static uint8_t  labelScrollOff = 0;   // поточний зсув (в символах CP)
+static uint32_t labelScrollMs  = 0;   // мітка часу останнього кроку
+static uint8_t  labelScrollPh  = 0;   // 0=очікування початку, 1=прокрутка, 2=пауза в кінці
+
+static void resetLabelScroll() {
+  labelScrollOff = 0;
+  labelScrollPh  = 0;
+  labelScrollMs  = millis();
+}
 
 // ─── EEPROM-помічники ─────────────────────────────────────────────────────────
 static uint8_t fieldsForType(MenuItemType t) {
@@ -222,13 +246,13 @@ static void loadAll() {
 // ─── Відображення ─────────────────────────────────────────────────────────────
 static void drawPageIndicator() {
   uint8_t totalPages = (currentCount + ITEMS_PER_PAGE - 1) / ITEMS_PER_PAGE;
-  tft.fillRect(220, 0, 100, 37, ST77XX_BLACK);
-  int cx = 310 - (totalPages - 1) * 18;
-  for (uint8_t p = 0; p < totalPages; p++, cx += 18) {
+  tft.fillRect(148, 0, 172, 26, ST77XX_BLACK);
+  int cx = 314 - (totalPages - 1) * 16;
+  for (uint8_t p = 0; p < totalPages; p++, cx += 16) {
     if (p == currentPage)
-      tft.fillCircle(cx, 18, 5, ST77XX_CYAN);
+      tft.fillCircle(cx, 13, 4, ST77XX_CYAN);
     else
-      tft.drawCircle(cx, 18, 5, tft.color565(80, 80, 80));
+      tft.drawCircle(cx, 13, 4, tft.color565(80, 80, 80));
   }
 }
 
@@ -259,12 +283,12 @@ static void drawValueArea(const MenuItem* item, uint16_t rowBg) {
   switch (item->type) {
 
     case ITEM_SUBMENU:
-      // "           >" — стрілка вправо вказує на підменю
-      printUA("           >", normClr, rowBg);
+      // "          >" = 10 пробілів + ">" = 11 CP
+      printUA("          >", normClr, rowBg);
       break;
 
     case ITEM_BACK:
-      printSpaces(12, normClr, rowBg);
+      printSpaces(11, normClr, rowBg);
       break;
 
     case ITEM_SLIDER: {
@@ -273,7 +297,7 @@ static void drawValueArea(const MenuItem* item, uint16_t rowBg) {
       uint8_t numCP  = (uint8_t)strlen(numStr);
       uint8_t unitCP = item->units ? countCP(item->units) : 0;
       uint8_t total  = numCP + (unitCP > 0 ? 1 + unitCP : 0);
-      uint8_t pad    = (total < 12) ? 12 - total : 0;
+      uint8_t pad    = (total < 11) ? 11 - total : 0;
       printSpaces(pad, normClr, rowBg);
       printUA(numStr, valClr, rowBg);
       if (unitCP > 0) {
@@ -284,10 +308,10 @@ static void drawValueArea(const MenuItem* item, uint16_t rowBg) {
     }
 
     case ITEM_CHECKBOX:
-      // 9 пробілів + "ВКЛ"(3CP) або 8 пробілів + "ВИКЛ"(4CP) = 12 CP
+      // 8 пробілів + "ВКЛ"(3CP) або 7 пробілів + "ВИКЛ"(4CP) = 11 CP
       printUA(values[item->valIdx]
-                ? "         \xD0\x92\xD0\x9A\xD0\x9B"
-                : "        \xD0\x92\xD0\x98\xD0\x9A\xD0\x9B",
+                ? "        \xD0\x92\xD0\x9A\xD0\x9B"
+                : "       \xD0\x92\xD0\x98\xD0\x9A\xD0\x9B",
               valClr, rowBg);
       break;
 
@@ -295,7 +319,7 @@ static void drawValueArea(const MenuItem* item, uint16_t rowBg) {
       const char** opts = (const char**)item->data;
       const char*  opt  = opts[(int)values[item->valIdx]];
       uint8_t optCP = countCP(opt);
-      uint8_t pad   = (optCP < 12) ? 12 - optCP : 0;
+      uint8_t pad   = (optCP < 11) ? 11 - optCP : 0;
       printSpaces(pad, normClr, rowBg);
       printUA(opt, valClr, rowBg);
       break;
@@ -308,8 +332,8 @@ static void drawValueArea(const MenuItem* item, uint16_t rowBg) {
       snprintf(hStr, 3, "%02d", h);
       snprintf(mStr, 3, "%02d", m);
       snprintf(sStr, 3, "%02d", s);
-      // "   HH:MM:SS " = 3+2+1+2+1+2+1 = 12 CP
-      printUA("   ", normClr, rowBg);
+      // "  HH:MM:SS " = 2+2+1+2+1+2+1 = 11 CP
+      printUA("  ", normClr, rowBg);
       printUA(hStr, (isEdit && editField == 0) ? editClr : normClr, rowBg);
       printUA(":", normClr, rowBg);
       printUA(mStr, (isEdit && editField == 1) ? editClr : normClr, rowBg);
@@ -329,7 +353,7 @@ static void drawValueArea(const MenuItem* item, uint16_t rowBg) {
       uint8_t hiCP   = (uint8_t)strlen(hiStr);
       uint8_t unitCP = item->units ? countCP(item->units) : 0;
       uint8_t content = loCP + 2 + hiCP + (unitCP > 0 ? 1 + unitCP : 0);
-      uint8_t pad     = (content < 12) ? 12 - content : 0;
+      uint8_t pad     = (content < 11) ? 11 - content : 0;
       printSpaces(pad, normClr, rowBg);
       printUA(loStr, (isEdit && editField == 0) ? editClr : normClr, rowBg);
       printUA("..", normClr, rowBg);
@@ -360,21 +384,22 @@ static void drawRow(uint8_t row) {
   uint16_t labelClr = (item->type == ITEM_SUBMENU || item->type == ITEM_BACK)
                         ? ST77XX_CYAN : ST77XX_WHITE;
 
-  tft.fillRect(  0, y,      320,  8, rowBg);
-  tft.fillRect(  0, y + 34, 320,  8, rowBg);
-  tft.fillRect(  0, y +  8,   4, 26, rowBg);
-  tft.fillRect(312, y +  8,   8, 26, rowBg);
+  tft.fillRect(  0, y,      320,  4, rowBg);
+  tft.fillRect(  0, y + 26, 320,  4, rowBg);
+  tft.fillRect(  0, y +  4,   4, 22, rowBg);
+  tft.fillRect(316, y +  4,   4, 22, rowBg);
 
-  tft.setCursor(4, y + 29);
-  printUA(item->label, labelClr, rowBg);
+  tft.setCursor(4, y + 22);
+  uint8_t soff = (sel && !editMode) ? labelScrollOff : 0;
+  printUAn(item->label, soff, 15, labelClr, rowBg);
   drawValueArea(item, rowBg);
 }
 
 static void drawFullMenu() {
   tft.fillScreen(ST77XX_BLACK);
-  tft.setCursor(4, 30);
+  tft.setCursor(4, 22);
   printUA(currentTitle, ST77XX_CYAN, ST77XX_BLACK);
-  tft.drawFastHLine(0, 37, 320, ST77XX_CYAN);
+  tft.drawFastHLine(0, 26, 320, ST77XX_CYAN);
   drawPageIndicator();
   for (uint8_t r = 0; r < ITEMS_PER_PAGE; r++) drawRow(r);
 }
@@ -394,6 +419,7 @@ static void enterSubMenu() {
   currentPage  = selectedItem / ITEMS_PER_PAGE;
   editMode     = false;
   editField    = 0;
+  resetLabelScroll();
   drawFullMenu();
 }
 
@@ -407,6 +433,7 @@ static void exitSubMenu() {
   currentTitle = navStack[navDepth].savedTitle;
   editMode     = false;
   editField    = 0;
+  resetLabelScroll();
   drawFullMenu();
 }
 
@@ -423,6 +450,7 @@ void settingsInit() {
   currentPage  = 0;
   lastEncoderPos = encoderGetPos();
   lastSW         = digitalRead(ENCODER_SW);
+  resetLabelScroll();
   drawFullMenu();
 }
 
@@ -442,6 +470,7 @@ void settingsUpdate() {
 
       selectedItem = (uint8_t)newSel;
       currentPage  = selectedItem / ITEMS_PER_PAGE;
+      resetLabelScroll();
 
       if (currentPage != oldPage) {
         drawFullMenu();
@@ -528,6 +557,34 @@ void settingsUpdate() {
           editField = 0;
         }
         drawRow(selectedItem % ITEMS_PER_PAGE);
+      }
+    }
+  }
+
+  // ── Анімація прокрутки мітки ─────────────────────────────────────────────
+  if (!editMode) {
+    uint8_t totalCP = countCP(currentItems[selectedItem].label);
+    if (totalCP > 15) {
+      uint32_t now = millis();
+      if (labelScrollPh == 0) {
+        if (now - labelScrollMs >= 500) {
+          labelScrollPh = 1;
+          labelScrollMs = now;
+        }
+      } else if (labelScrollPh == 1) {
+        if (now - labelScrollMs >= 200) {
+          labelScrollMs = now;
+          labelScrollOff++;
+          if (labelScrollOff + 15 >= totalCP) labelScrollPh = 2;
+          drawRow(selectedItem % ITEMS_PER_PAGE);
+        }
+      } else {
+        if (now - labelScrollMs >= 500) {
+          labelScrollOff = 0;
+          labelScrollPh  = 0;
+          labelScrollMs  = now;
+          drawRow(selectedItem % ITEMS_PER_PAGE);
+        }
       }
     }
   }
