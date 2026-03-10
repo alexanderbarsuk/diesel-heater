@@ -5,6 +5,7 @@
 #include "config.h"
 #include "background.h"
 #include <math.h>
+#include <avr/pgmspace.h>
 
 // ─── Розмітка екрану (320×240, UA_ADVANCE=12, 26 CP/рядок) ──────────────────
 // Всі рядки починаються з x=4, ширина 26 CP = 312 px
@@ -86,7 +87,7 @@ static void drawPower() {
 static void drawTemperature(int16_t x, int16_t yTop, float t) {
   tft.setCursor(x, yTop + UA_ASCENT);
   if (isnan(t) || t < -100.0f || t > 1400.0f) {
-    printUA("  --.- \xC2\xB0""C", ST77XX_WHITE, BG);  // 9 CP
+    printUA("0\xC2\xB0""C", ST77XX_WHITE, BG);  // 9 CP
   } else {
     char num[8];
     snprintf(num, sizeof(num), "%.1f", t);
@@ -97,7 +98,7 @@ static void drawTemperature(int16_t x, int16_t yTop, float t) {
     sp[pad] = '\0';
     printUA(sp,  ST77XX_WHITE, BG);
     printUA(num, ST77XX_WHITE, BG);
-    printUA(" \xC2\xB0""C", ST77XX_WHITE, BG);
+    printUA("\xC2\xB0""C", ST77XX_WHITE, BG);
   }
 }
 
@@ -116,29 +117,25 @@ static void drawBottom() {
 }
 
 // ─── Фонове зображення ───────────────────────────────────────────────────────
+static uint16_t _bgRowBuf[BG_IMG_W];
+
+#define DRAW_BG_PART(bitmap, startRow) \
+  { uint_farptr_t _a = pgm_get_far_address(bitmap); \
+    for (uint8_t _r = 0; _r < BG_ROWS_PART; _r++) { \
+      memcpy_PF(_bgRowBuf, _a, (size_t)BG_IMG_W * 2); \
+      _a += (uint_farptr_t)BG_IMG_W * 2; \
+      tft.startWrite(); \
+      tft.setAddrWindow(0, (startRow) + _r, BG_IMG_W, 1); \
+      for (uint16_t _i = 0; _i < BG_IMG_W; _i++) tft.writeColor(_bgRowBuf[_i], 1); \
+      tft.endWrite(); \
+    } }
+
 static void drawBackground() {
-  const int16_t xOff = (320 - BG_IMG_W) / 2;
-  const int16_t yOff = (240 - BG_IMG_H) / 2;
-
   tft.fillScreen(BG);
-
-  uint32_t addr = pgm_get_far_address(backgroundBitmap0);
-  for (uint8_t row = 0; row < BG_ROWS_P; row++) {
-    tft.startWrite();
-    tft.setAddrWindow(xOff, yOff + row, BG_IMG_W, 1);
-    for (uint16_t col = 0; col < BG_IMG_W; col++, addr += 2)
-      tft.writeColor(pgm_read_word_far(addr), 1);
-    tft.endWrite();
-  }
-
-  addr = pgm_get_far_address(backgroundBitmap1);
-  for (uint8_t row = BG_ROWS_P; row < BG_IMG_H; row++) {
-    tft.startWrite();
-    tft.setAddrWindow(xOff, yOff + row, BG_IMG_W, 1);
-    for (uint16_t col = 0; col < BG_IMG_W; col++, addr += 2)
-      tft.writeColor(pgm_read_word_far(addr), 1);
-    tft.endWrite();
-  }
+  DRAW_BG_PART(backgroundBitmap0,   0)
+  DRAW_BG_PART(backgroundBitmap1,  34)
+  DRAW_BG_PART(backgroundBitmap2,  68)
+  DRAW_BG_PART(backgroundBitmap3, 102)
 }
 
 // ─── sensorsInit ─────────────────────────────────────────────────────────────
