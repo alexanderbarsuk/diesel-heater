@@ -2,6 +2,7 @@
 #include "screen_greeting.h"
 #include "screen_sensors.h"
 #include "screen_settings.h"
+#include "screen_faults.h"
 
 typedef struct {
   void (*init)();
@@ -9,12 +10,13 @@ typedef struct {
 } ScreenDef;
 
 static const ScreenDef screens[] = {
-  { greetingInit,  greetingUpdate  },
-  { sensorsInit,   sensorsUpdate   },
-  { settingsInit,  settingsUpdate  },
+  { greetingInit,      greetingUpdate      },
+  { sensorsInit,       sensorsUpdate       },
+  { settingsInit,      settingsUpdate      },
+  { faultsScreenInit,  faultsScreenUpdate  },
 };
 
-static const uint8_t SCREEN_COUNT = 3;
+static const uint8_t SCREEN_COUNT = 4;
 static uint8_t current = 0;
 
 void screenManagerInit() {

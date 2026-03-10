@@ -1,12 +1,73 @@
 #include "heater.h"
 #include "config.h"
+#include "faults.h"
 #include <SPI.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <math.h>
 
+// ─── Таблиця 10 ступенів потужності (цільові оберти для ПІД) ─────────────────
+// Відкалібрувати: підібрати RPM так, щоб на кожному ступені горіння стале.
+// Насос (1 імп/об): 60 RPM = 1 Гц, 420 RPM = 7 Гц
+PowerStep POWER_TABLE[10] = {
+  {1200,  60},  //  1 — мінімум  (1 Гц насос)
+  {1550,  78},  //  2
+  {1950, 102},  //  3
+  {2350, 132},  //  4
+  {2750, 168},  //  5
+  {3150, 210},  //  6
+  {3550, 258},  //  7
+  {3950, 312},  //  8
+  {4350, 372},  //  9
+  {4800, 420},  // 10 — максимум (7 Гц насос)
+};
+
+// ─── ПІД-регулятори (velocity-form PI, Ts = 1 с) ─────────────────────────────
+// Δu = Kp*(e−ePrev) + Ki*e;  u[k] = clamp(u[k−1] + Δu, 0, 255)
+struct PidCtrl {
+  int16_t prevErr;   // e[k-1], RPM
+  uint8_t  pwm;      // u[k-1], ШІМ 0..255
+};
+
+static PidCtrl fanPid  = {0, 0};
+static PidCtrl pumpPid = {0, 0};
+
+// Динамічні коефіцієнти (змінюються з меню через heaterSetPid)
+static float fanKp  = FAN_PID_KP;
+static float fanKi  = FAN_PID_KI;
+static float pumpKp = PUMP_PID_KP;
+static float pumpKi = PUMP_PID_KI;
+
+static uint8_t pidStep(PidCtrl& pid, uint16_t target, uint16_t measured,
+                        float kp, float ki) {
+  if (target == 0) {
+    pid.prevErr = 0;
+    pid.pwm     = 0;
+    return 0;
+  }
+  int16_t err   = (int16_t)target - (int16_t)measured;
+  float   delta = kp * (float)(err - pid.prevErr) + ki * (float)err;
+  pid.prevErr   = err;
+  int16_t out   = (int16_t)pid.pwm + (int16_t)delta;
+  if (out <   0) out =   0;
+  if (out > 255) out = 255;
+  pid.pwm = (uint8_t)out;
+  return pid.pwm;
+}
+
 // ─── Глобальний стан ──────────────────────────────────────────────────────────
-HeaterData heater = { HEATER_OFF, 5, NAN, NAN, NAN, NAN, 0, 0.0f };
+HeaterData heater = { HEATER_OFF, 5, NAN, NAN, NAN, NAN, 0, 0, 0, 0, 0.0f, MODE_HEAT };
+
+static float    chargerThreshold  = 10.5f;   // В; змінюється через heaterSetChargerThreshold()
+static uint8_t  primingMode       = 0;       // 0=утримання, 1=таймер
+static uint32_t primingDurationMs = 10000;   // мс; змінюється через heaterSetPrimingDuration()
+
+static float readVoltage() {
+  uint16_t sum = 0;
+  for (uint8_t i = 0; i < 4; i++) sum += analogRead(VOLT_PIN);
+  float vAdc = (float)(sum >> 2) * (5.0f / 1023.0f);
+  return vAdc * (float)(VOLT_R1_KOHM + VOLT_R2_KOHM) / (float)VOLT_R2_KOHM;
+}
 
 // ─── MAX6675 (raw SPI read) ───────────────────────────────────────────────────
 // Протокол: CS↓ → 16-bit read MSB-first SPI_MODE0 → CS↑
@@ -36,6 +97,23 @@ static volatile uint32_t pumpCount = 0;
 static void fanISR()  { fanCount++;  }
 static void pumpISR() { pumpCount++; }
 
+// ─── updateModeLeds ──────────────────────────────────────────────────────────
+static void updateModeLeds() {
+  digitalWrite(LED_HEAT_PIN, heater.mode == MODE_HEAT ? HIGH : LOW);
+  digitalWrite(LED_VENT_PIN, heater.mode == MODE_VENT ? HIGH : LOW);
+}
+
+// ─── updateOutputs ───────────────────────────────────────────────────────────
+// Синхронізує клапан і свічку із поточним станом. Викликати після зміни стану.
+static void updateOutputs() {
+  bool valveOpen = (heater.state == HEATER_STARTING ||
+                    heater.state == HEATER_RUNNING  ||
+                    heater.state == HEATER_PRIMING);
+  bool ignActive = (heater.state == HEATER_STARTING);
+  digitalWrite(FUEL_VALVE_PIN, valveOpen ? HIGH : LOW);
+  digitalWrite(IGNITION_PIN,   ignActive ? HIGH : LOW);
+}
+
 // ─── heaterSetup ─────────────────────────────────────────────────────────────
 void heaterSetup() {
   // CS піни MAX6675
@@ -52,6 +130,35 @@ void heaterSetup() {
   dsOut.requestTemperatures();
   dsIn.requestTemperatures();
 
+  // Цифрові виходи (закрито/вимкнено на старті)
+  pinMode(FUEL_VALVE_PIN, OUTPUT);
+  pinMode(IGNITION_PIN,   OUTPUT);
+  pinMode(CHARGER_PIN,    OUTPUT);
+  digitalWrite(FUEL_VALVE_PIN, LOW);
+  digitalWrite(IGNITION_PIN,   LOW);
+  digitalWrite(CHARGER_PIN,    LOW);
+
+  // ШІМ виходи двигунів (вимкнено на старті)
+  pinMode(FAN_PWM_PIN,  OUTPUT);
+  pinMode(PUMP_PWM_PIN, OUTPUT);
+  analogWrite(FAN_PWM_PIN,  0);
+  analogWrite(PUMP_PWM_PIN, 0);
+
+  // Кнопки режиму з LED
+  pinMode(BTN_HEAT_PIN, INPUT_PULLUP);
+  pinMode(BTN_VENT_PIN, INPUT_PULLUP);
+  pinMode(LED_HEAT_PIN, OUTPUT);
+  pinMode(LED_VENT_PIN, OUTPUT);
+  updateModeLeds();  // Нагрів активний за замовчуванням
+
+  // Кнопка прокачки пального
+  pinMode(BUTTON, INPUT_PULLUP);
+
+  // Контактні датчики
+  pinMode(SENSOR_EMERGENCY_PIN,     INPUT_PULLUP);
+  pinMode(SENSOR_FUEL_OVERFLOW_PIN, INPUT_PULLUP);
+  pinMode(SENSOR_FUEL_MIN_PIN,      INPUT_PULLUP);
+
   // Тахометр
   pinMode(TACH_FAN_PIN,  INPUT_PULLUP);
   pinMode(TACH_PUMP_PIN, INPUT_PULLUP);
@@ -62,6 +169,64 @@ void heaterSetup() {
 // ─── heaterUpdate ────────────────────────────────────────────────────────────
 // Non-blocking, викликається кожен loop(). Оновлює дані раз на 1000 мс.
 void heaterUpdate() {
+  // ── Прокачка: перевірка кнопки (без затримки, кожен виклик) ─────────────
+  static bool     prevBtn        = true;   // HIGH = не натиснуто (INPUT_PULLUP)
+  static uint32_t primingStartMs = 0;
+  bool btn = digitalRead(BUTTON);
+  if (btn != prevBtn) {
+    if (!btn && (heater.state == HEATER_OFF || heater.state == HEATER_FAULT)) {
+      // Натиснули → прокачка: насос на максимум, вентилятор стоп
+      heater.state   = HEATER_PRIMING;
+      heater.pumpPwm = 255;
+      heater.fanPwm  = 0;
+      analogWrite(PUMP_PWM_PIN, 255);
+      analogWrite(FAN_PWM_PIN,  0);
+      pumpPid        = {0, 0};
+      primingStartMs = millis();
+    } else if (btn && heater.state == HEATER_PRIMING && primingMode == 0) {
+      // Відпустили → зупинка тільки в режимі утримання
+      heater.state   = HEATER_OFF;
+      heater.pumpPwm = 0;
+      heater.fanPwm  = 0;
+      analogWrite(PUMP_PWM_PIN, 0);
+      analogWrite(FAN_PWM_PIN,  0);
+      pumpPid = {0, 0};
+    }
+    prevBtn = btn;
+    updateOutputs();
+  }
+  // Таймерний режим: авто-зупинка після заданого часу
+  if (primingMode == 1 && heater.state == HEATER_PRIMING &&
+      primingDurationMs > 0 && (millis() - primingStartMs >= primingDurationMs)) {
+    heater.state   = HEATER_OFF;
+    heater.pumpPwm = 0;
+    heater.fanPwm  = 0;
+    analogWrite(PUMP_PWM_PIN, 0);
+    analogWrite(FAN_PWM_PIN,  0);
+    pumpPid = {0, 0};
+    updateOutputs();
+  }
+
+  // ── Кнопки режиму (тільки при вимкненому обігрівачі) ─────────────────────
+  static bool prevBtnHeat = true;
+  static bool prevBtnVent = true;
+  bool btnHeat = digitalRead(BTN_HEAT_PIN);
+  bool btnVent = digitalRead(BTN_VENT_PIN);
+  if (heater.state == HEATER_OFF || heater.state == HEATER_FAULT) {
+    if (!btnHeat && prevBtnHeat && heater.mode != MODE_HEAT) {
+      heater.mode = MODE_HEAT;
+      updateModeLeds();
+    }
+    if (!btnVent && prevBtnVent && heater.mode != MODE_VENT) {
+      heater.mode = MODE_VENT;
+      updateModeLeds();
+    }
+  }
+  prevBtnHeat = btnHeat;
+  prevBtnVent = btnVent;
+
+  if (heater.state == HEATER_PRIMING) return;
+
   static uint32_t lastMs = 0;
   uint32_t now = millis();
   if (now - lastMs < 1000) return;
@@ -80,23 +245,94 @@ void heaterUpdate() {
   dsOut.requestTemperatures();
   dsIn.requestTemperatures();
 
-  // Тахометр: читаємо лічильники за 1 с
+  // Тахометр: читаємо лічильники за 1 с → об/хв
   uint32_t fc, pc;
   noInterrupts();
   fc = fanCount;  fanCount  = 0;
   pc = pumpCount; pumpCount = 0;
   interrupts();
-  heater.fanRPM = (uint16_t)((fc * 60u) / FAN_PULSES_PER_REV);
-  heater.pumpHz = (float)pc;
+  heater.fanRpm  = (uint16_t)((fc * 60u) / FAN_PULSES_PER_REV);
+  heater.pumpRpm = (uint16_t)((pc * 60u) / PUMP_PULSES_PER_REV);
+
+  // Контактні датчики (LOW = спрацювало, INPUT_PULLUP)
+  static bool prevEmerg    = true;
+  static bool prevOverflow = true;
+  static bool prevFuelMin  = true;
+  bool emerg    = digitalRead(SENSOR_EMERGENCY_PIN);
+  bool overflow = digitalRead(SENSOR_FUEL_OVERFLOW_PIN);
+  bool fuelMin  = digitalRead(SENSOR_FUEL_MIN_PIN);
+  if (!emerg    && prevEmerg)    { faultLog(FAULT_EMERGENCY);     heater.state = HEATER_FAULT; }
+  if (!overflow && prevOverflow) { faultLog(FAULT_FUEL_OVERFLOW); heater.state = HEATER_FAULT; }
+  if (!fuelMin  && prevFuelMin)  { faultLog(FAULT_FUEL_MIN);      heater.state = HEATER_FAULT; }
+  prevEmerg    = emerg;
+  prevOverflow = overflow;
+  prevFuelMin  = fuelMin;
+  updateOutputs();  // клапан і свічка реагують на зміну стану негайно
+
+  // Напруга живлення та керування зарядкою
+  heater.voltage = readVoltage();
+  digitalWrite(CHARGER_PIN, (heater.voltage < chargerThreshold) ? HIGH : LOW);
+
+  // ПІД-регулятори: отримуємо цільові оберти з таблиці
+  uint16_t fTarget = 0, pTarget = 0;
+  if (heater.state == HEATER_RUNNING || heater.state == HEATER_STARTING) {
+    uint8_t idx = heater.power - 1;
+    fTarget = POWER_TABLE[idx].fanRpm;
+    pTarget = POWER_TABLE[idx].pumpRpm;
+  }
+  uint8_t fPwm = pidStep(fanPid,  fTarget, heater.fanRpm,  fanKp,  fanKi);
+  uint8_t pPwm = pidStep(pumpPid, pTarget, heater.pumpRpm, pumpKp, pumpKi);
+
+  if (heater.fanPwm != fPwm) {
+    heater.fanPwm = fPwm;
+    analogWrite(FAN_PWM_PIN, fPwm);
+  }
+  if (heater.pumpPwm != pPwm) {
+    heater.pumpPwm = pPwm;
+    analogWrite(PUMP_PWM_PIN, pPwm);
+  }
 }
 
 // ─── heaterToggle ─────────────────────────────────────────────────────────────
 void heaterToggle() {
   if (heater.state == HEATER_OFF || heater.state == HEATER_FAULT) {
+    fanPid  = {0, 0};   // скидаємо ПІД перед стартом
+    pumpPid = {0, 0};
     heater.state = HEATER_RUNNING;   // TODO: замінити на HEATER_STARTING + реальну послідовність запуску
   } else if (heater.state == HEATER_RUNNING || heater.state == HEATER_STARTING) {
     heater.state = HEATER_OFF;       // TODO: замінити на HEATER_STOPPING + охолодження
+    // ШІМ скинеться на 0 при наступному heaterUpdate() через target=0
   }
+  updateOutputs();
+}
+
+// ─── heaterSetPowerStep ───────────────────────────────────────────────────────
+void heaterSetPowerStep(uint8_t step, uint16_t fanRpm, uint16_t pumpRpm) {
+  if (step >= 10) return;
+  POWER_TABLE[step].fanRpm  = fanRpm;
+  POWER_TABLE[step].pumpRpm = pumpRpm;
+}
+
+// ─── heaterSetPid ─────────────────────────────────────────────────────────────
+void heaterSetPid(float fKp, float fKi, float pKp, float pKi) {
+  fanKp  = fKp;
+  fanKi  = fKi;
+  pumpKp = pKp;
+  pumpKi = pKi;
+}
+
+// ─── heaterSetChargerThreshold ───────────────────────────────────────────────
+void heaterSetChargerThreshold(float threshV) {
+  chargerThreshold = threshV;
+}
+
+// ─── heaterSetPrimingMode / heaterSetPrimingDuration ─────────────────────────
+void heaterSetPrimingMode(uint8_t mode) {
+  primingMode = mode;
+}
+
+void heaterSetPrimingDuration(uint32_t seconds) {
+  primingDurationMs = seconds * 1000UL;
 }
 
 // ─── heaterSetPower ───────────────────────────────────────────────────────────

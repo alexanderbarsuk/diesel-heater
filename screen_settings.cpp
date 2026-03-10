@@ -2,6 +2,7 @@
 #include "uaprint.h"
 #include "encoder.h"
 #include "config.h"
+#include "heater.h"
 #include <EEPROM.h>
 
 // ─── Типи елементів меню ─────────────────────────────────────────────────────
@@ -48,23 +49,30 @@ static const char UNITS_V[] = "В";
 static const char UNITS_A[] = ""; 
 
 // ─── Опції для ITEM_SELECT ───────────────────────────────────────────────────
-static const char* modeOpts[]  = { "Авто ", "Нагрів", "Вентиляція" };
-static const char* resetOpts[] = { "Літо ", "Зима" };
+static const char* modeOpts[]        = { "Авто ", "Нагрів", "Вентиляція" };
+static const char* resetOpts[]       = { "Літо ", "Зима" };
+static const char* primingModeOpts[] = { "Утримання", "Таймер" };
 
-// ─── Підменю "КОРЕКЦІЇ" ───────────────────────────────────────────────────────
-// Для додавання нових підменю: 1) визначте масив MenuItem + SubMenuDef,
-// 2) додайте ITEM_SUBMENU до відповідного меню,
-// 3) додайте &yourSub до allSubMenus[].
-// ─── Підменю "КОРЕКЦІЇ" ──────────────────────────────────────────────────────
-// valIdx 9..11  EEPROM addr 24..28  (2B кожен)
-static const MenuItem corrItems[] = {
-  // label           type        valIdx  addr  min   max  default  units      data
-  { "< Назад   ", ITEM_BACK,    NO_VAL,  0,    0,    0,   0,       nullptr,   nullptr   },
-  { "Корект.тем", ITEM_SLIDER,   9,     24,   -5,    5,   0,       UNITS_C,   nullptr   },
-  { "Корект.вол", ITEM_SLIDER,  10,     26,  -10,   10,   0,       UNITS_PCT, nullptr   },
-  { "Корект.тис", ITEM_SLIDER,  11,     28,  -50,   50,   0,       UNITS_HPA, nullptr   },
+// ─── Підменю "ПОТУЖНІСТЬ" (таблиця 10 ступенів) ──────────────────────────────
+// lo = pumpRpm (оберти насоса), hi = fanRpm (оберти вент.) — lo≤hi завжди ✓
+// valIdx 20..29  EEPROM addr 46..85  (4B кожен = ITEM_RANGE: lo(2B)+hi(2B))
+#define MK_STEP(pump, fan) \
+  (int32_t)((uint16_t)(pump) | ((uint32_t)(uint16_t)(fan) << 16))
+static const MenuItem powerItems[] = {
+  // label           type        valIdx  addr   min   max   default              units    data
+  { "< Назад   ", ITEM_BACK,    NO_VAL,  0,      0,    0,   0,                  nullptr, nullptr },
+  { "Ступінь 1 ", ITEM_RANGE,   20,     46,      0, 5000,   MK_STEP( 60, 1200), nullptr, nullptr },
+  { "Ступінь 2 ", ITEM_RANGE,   21,     50,      0, 5000,   MK_STEP( 78, 1550), nullptr, nullptr },
+  { "Ступінь 3 ", ITEM_RANGE,   22,     54,      0, 5000,   MK_STEP(102, 1950), nullptr, nullptr },
+  { "Ступінь 4 ", ITEM_RANGE,   23,     58,      0, 5000,   MK_STEP(132, 2350), nullptr, nullptr },
+  { "Ступінь 5 ", ITEM_RANGE,   24,     62,      0, 5000,   MK_STEP(168, 2750), nullptr, nullptr },
+  { "Ступінь 6 ", ITEM_RANGE,   25,     66,      0, 5000,   MK_STEP(210, 3150), nullptr, nullptr },
+  { "Ступінь 7 ", ITEM_RANGE,   26,     70,      0, 5000,   MK_STEP(258, 3550), nullptr, nullptr },
+  { "Ступінь 8 ", ITEM_RANGE,   27,     74,      0, 5000,   MK_STEP(312, 3950), nullptr, nullptr },
+  { "Ступінь 9 ", ITEM_RANGE,   28,     78,      0, 5000,   MK_STEP(372, 4350), nullptr, nullptr },
+  { "Ступінь 10", ITEM_RANGE,   29,     82,      0, 5000,   MK_STEP(420, 4800), nullptr, nullptr },
 };
-static const SubMenuDef corrSubDef = { "КОРЕКЦІЇ", corrItems, 4 };
+static const SubMenuDef corrSubDef = { "ПОТУЖНІСТЬ", powerItems, 11 };
 
 // ─── Підменю "АВАРІЇ" ────────────────────────────────────────────────────────
 // valIdx 12..15  EEPROM addr 30..36  (2B кожен)
@@ -78,6 +86,19 @@ static const MenuItem dangerItems[] = {
 };
 static const SubMenuDef dangerSubDef = { "АВАРІЇ", dangerItems, 5 };
 
+// ─── Підменю "ПІД" ───────────────────────────────────────────────────────────
+// valIdx 16..19  EEPROM addr 38..44  (2B кожен)
+// Значення зберігаються як ×1000 цілі: 40 = Kp 0.040 [ШІМ/RPM]
+static const MenuItem pidItems[] = {
+  // label              type        valIdx  addr  min   max  default  units     data
+  { "< Назад   ",    ITEM_BACK,    NO_VAL,   0,    0,    0,    0,    nullptr,  nullptr },
+  { "Вентилятор Kp", ITEM_SLIDER,  16,      38,    0,  999,   40,    nullptr,  nullptr },
+  { "Вентилятор Ki", ITEM_SLIDER,  17,      40,    0,  999,    8,    nullptr,  nullptr },
+  { "Насос Kp", ITEM_SLIDER,  18,      42,    0,  999,  400,    nullptr,  nullptr },
+  { "Насос Ki", ITEM_SLIDER,  19,      44,    0,  999,   80,    nullptr,  nullptr },
+};
+static const SubMenuDef pidSubDef = { "ПІД", pidItems, 5 };
+
 // ─── Головне меню ────────────────────────────────────────────────────────────
 // valIdx 0..8   EEPROM addr 0..22
 // EEPROM map: 0(2) 2(2) 4(2) 6(4=RANGE) 10(2) 12(2) 14(4=TIME) 18(4=TIME) 22(2)
@@ -89,23 +110,26 @@ static const MenuItem rootItems[] = {
   { "Напруга живлення",     ITEM_RANGE,     3,   6,    8,   30,  (int32_t)((uint16_t)10|((uint32_t)(uint16_t)25<<16)), UNITS_V, nullptr               },
   { "Макс струм свічки",    ITEM_SLIDER,    4,  10,    5,   30,   15,                                               UNITS_A,   nullptr               },
   { "Запуск при старті",    ITEM_CHECKBOX,  5,  12,    0,    1,    0,                                               nullptr,   nullptr               },
+  { "Режим прокачки",       ITEM_SELECT,   31,  26,    0,    1,    0,                                               nullptr,   (const void*)primingModeOpts},
   { "Час прокачки",         ITEM_TIME,      6,  14,    0,    0,   10,                                               nullptr,   nullptr               },
   { "Час роботи свічки",    ITEM_TIME,      7,  18,    0,    0,   60,                                               nullptr,   nullptr               },
   { "Сезон роботи",         ITEM_SELECT,    8,  22,    0,    1,    0,                                               nullptr,   (const void*)resetOpts},
-  { "Корекції",             ITEM_SUBMENU, NO_VAL, 0,   0,    0,    0,                                               nullptr,   &corrSubDef           },
+  { "Поріг зарядки",        ITEM_SLIDER,   30,  24,    9,   14,   11,                                               UNITS_V,   nullptr               },
+  { "Потужність ", ITEM_SUBMENU, NO_VAL, 0,   0,    0,    0,                                               nullptr,   &corrSubDef           },
   { "Аварії",               ITEM_SUBMENU, NO_VAL, 0,   0,    0,    0,                                               nullptr,   &dangerSubDef         },
+  { "ПІД регулятор",        ITEM_SUBMENU, NO_VAL, 0,   0,    0,    0,                                               nullptr,   &pidSubDef            },
 };
-#define ROOT_COUNT  11
+#define ROOT_COUNT  14
 
 // ─── Реєстр підменю (для saveAll/loadAll) ────────────────────────────────────
-static const SubMenuDef* allSubMenus[] = { &corrSubDef, &dangerSubDef };
-#define NUM_SUBMENUS  2
+static const SubMenuDef* allSubMenus[] = { &corrSubDef, &dangerSubDef, &pidSubDef };
+#define NUM_SUBMENUS  3
 
-#define TOTAL_VALUES   16   // valIdx 0..15
+#define TOTAL_VALUES   32   // valIdx 0..29
 #define ITEMS_PER_PAGE  7
 
 #define EEPROM_MAGIC_ADDR  100
-#define EEPROM_MAGIC_VAL   0xA7
+#define EEPROM_MAGIC_VAL   0xAB
 
 // ─── Розмітка рядків (UA_ADVANCE=12, UA_ASCENT=18) ───────────────────────────
 // Row = 4px top + 22px content (ascent+descent+1) + 4px bottom = 30px total
@@ -241,6 +265,32 @@ static void loadAll() {
   for (uint8_t s = 0; s < NUM_SUBMENUS; s++)
     for (uint8_t i = 0; i < allSubMenus[s]->count; i++)
       loadValue(&allSubMenus[s]->items[i]);
+}
+
+// Передаємо поріг зарядки в heater.cpp
+static void applyCharger() {
+  heaterSetChargerThreshold((float)values[30]);
+}
+
+// Передаємо налаштування прокачки в heater.cpp
+static void applyPriming() {
+  heaterSetPrimingMode((uint8_t)values[31]);
+  heaterSetPrimingDuration((uint32_t)values[6]);
+}
+
+// Передаємо ПІД-коефіцієнти в heater.cpp (values ×1000 → float)
+static void applyPid() {
+  heaterSetPid(values[16] * 0.001f, values[17] * 0.001f,
+               values[18] * 0.001f, values[19] * 0.001f);
+}
+
+// Передаємо таблицю потужності в heater.cpp (lo=pumpRpm, hi=fanRpm)
+static void applyPowerTable() {
+  for (uint8_t i = 0; i < 10; i++) {
+    uint16_t pumpRpm = (uint16_t)(values[20 + i] & 0xFFFF);
+    uint16_t fanRpm  = (uint16_t)((uint32_t)values[20 + i] >> 16);
+    heaterSetPowerStep(i, fanRpm, pumpRpm);
+  }
 }
 
 // ─── Відображення ─────────────────────────────────────────────────────────────
@@ -440,6 +490,10 @@ static void exitSubMenu() {
 // ─────────────────────────────────────────────────────────────────────────────
 void settingsInit() {
   loadAll();
+  applyPriming();
+  applyPid();
+  applyPowerTable();
+  applyCharger();
   navDepth     = 0;
   currentItems = rootItems;
   currentCount = ROOT_COUNT;
@@ -553,6 +607,10 @@ void settingsUpdate() {
           editField++;
         } else {
           saveValue(item);
+          if (item->valIdx == 6 || item->valIdx == 31) applyPriming();
+          if (item->valIdx >= 16 && item->valIdx <= 19) applyPid();
+          if (item->valIdx >= 20 && item->valIdx <= 29) applyPowerTable();
+          if (item->valIdx == 30) applyCharger();
           editMode  = false;
           editField = 0;
         }

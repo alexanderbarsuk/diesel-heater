@@ -2,12 +2,14 @@
 #include "display.h"
 #include "encoder.h"
 #include "heater.h"
+#include "faults.h"
 #include "screen_manager.h"
 
 void setup() {
   displaySetup();
   encoderSetup();
   heaterSetup();
+  faultsInit();
   pinMode(BUTTON, INPUT_PULLUP);
   screenManagerInit();
 }
