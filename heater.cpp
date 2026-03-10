@@ -62,6 +62,15 @@ static float    chargerThreshold  = 10.5f;   // В; змінюється чер�
 static uint8_t  primingMode       = 0;       // 0=утримання, 1=таймер
 static uint32_t primingDurationMs = 10000;   // мс; змінюється через heaterSetPrimingDuration()
 
+// ─── Параметри послідовності запуску/зупинки ──────────────────────────────────
+static uint32_t startupStartMs  = 0;      // millis() початку STARTING/RESTARTING
+static uint32_t ignitionTimeMs  = 60000;  // тривалість роботи свічки (мс)
+static uint16_t startFanRpm     = 1200;   // оберти вент. під час запуску
+static uint16_t startPumpRpm    = 60;     // оберти насоса під час запуску
+static uint16_t startFireTemp   = 300;    // температура займання (°C)
+static uint16_t coolFanRpm      = 1500;   // оберти вент. під час охолодження
+static uint16_t coolStopTemp    = 80;     // температура зупинки (°C)
+
 static float readVoltage() {
   uint16_t sum = 0;
   for (uint8_t i = 0; i < 4; i++) sum += analogRead(VOLT_PIN);
@@ -85,9 +94,7 @@ static float readMAX6675(uint8_t csPin) {
 }
 
 // ─── Dallas DS18B20 ───────────────────────────────────────────────────────────
-static OneWire           owOut(DS_AIR_OUT_PIN);
 static OneWire           owIn(DS_AIR_IN_PIN);
-static DallasTemperature dsOut(&owOut);
 static DallasTemperature dsIn(&owIn);
 
 // ─── Тахометр (лічильники переривань) ────────────────────────────────────────
@@ -106,10 +113,13 @@ static void updateModeLeds() {
 // ─── updateOutputs ───────────────────────────────────────────────────────────
 // Синхронізує клапан і свічку із поточним станом. Викликати після зміни стану.
 static void updateOutputs() {
-  bool valveOpen = (heater.state == HEATER_STARTING ||
-                    heater.state == HEATER_RUNNING  ||
+  bool valveOpen = (heater.state == HEATER_STARTING    ||
+                    heater.state == HEATER_RESTARTING  ||
+                    heater.state == HEATER_RUNNING      ||
                     heater.state == HEATER_PRIMING);
-  bool ignActive = (heater.state == HEATER_STARTING);
+  // Свічка активна тільки під час запуску і поки не минув час ignitionTimeMs
+  bool ignActive = (heater.state == HEATER_STARTING || heater.state == HEATER_RESTARTING) &&
+                   (ignitionTimeMs == 0 || (millis() - startupStartMs < ignitionTimeMs));
   digitalWrite(FUEL_VALVE_PIN, valveOpen ? HIGH : LOW);
   digitalWrite(IGNITION_PIN,   ignActive ? HIGH : LOW);
 }
@@ -119,15 +129,14 @@ void heaterSetup() {
   // CS піни MAX6675
   pinMode(TC_CHAMBER_CS, OUTPUT);
   pinMode(TC_EXHAUST_CS, OUTPUT);
+  pinMode(TC_AIR_OUT_CS, OUTPUT);
   digitalWrite(TC_CHAMBER_CS, HIGH);
   digitalWrite(TC_EXHAUST_CS, HIGH);
+  digitalWrite(TC_AIR_OUT_CS, HIGH);
 
   // Dallas DS18B20: запуск першої конвертації
-  dsOut.begin();
   dsIn.begin();
-  dsOut.setWaitForConversion(false);
   dsIn.setWaitForConversion(false);
-  dsOut.requestTemperatures();
   dsIn.requestTemperatures();
 
   // Цифрові виходи (закрито/вимкнено на старті)
@@ -152,7 +161,7 @@ void heaterSetup() {
   updateModeLeds();  // Нагрів активний за замовчуванням
 
   // Кнопка прокачки пального
-  pinMode(BUTTON, INPUT_PULLUP);
+  pinMode(PRIMING_BTN_PIN, INPUT_PULLUP);
 
   // Контактні датчики
   pinMode(SENSOR_EMERGENCY_PIN,     INPUT_PULLUP);
@@ -172,7 +181,7 @@ void heaterUpdate() {
   // ── Прокачка: перевірка кнопки (без затримки, кожен виклик) ─────────────
   static bool     prevBtn        = true;   // HIGH = не натиснуто (INPUT_PULLUP)
   static uint32_t primingStartMs = 0;
-  bool btn = digitalRead(BUTTON);
+  bool btn = digitalRead(PRIMING_BTN_PIN);
   if (btn != prevBtn) {
     if (!btn && (heater.state == HEATER_OFF || heater.state == HEATER_FAULT)) {
       // Натиснули → прокачка: насос на максимум, вентилятор стоп
@@ -235,14 +244,11 @@ void heaterUpdate() {
   // MAX6675 (вбудований SPI, ~20 мкс на читання)
   heater.tempChamber = readMAX6675(TC_CHAMBER_CS);
   heater.tempExhaust = readMAX6675(TC_EXHAUST_CS);
+  heater.tempAirOut  = readMAX6675(TC_AIR_OUT_CS);
 
   // DS18B20: читаємо попередню конвертацію, запускаємо нову
-  float t;
-  t = dsOut.getTempCByIndex(0);
-  heater.tempAirOut = (t <= DEVICE_DISCONNECTED_C + 1.0f) ? NAN : t;
-  t = dsIn.getTempCByIndex(0);
+  float t = dsIn.getTempCByIndex(0);
   heater.tempAirIn  = (t <= DEVICE_DISCONNECTED_C + 1.0f) ? NAN : t;
-  dsOut.requestTemperatures();
   dsIn.requestTemperatures();
 
   // Тахометр: читаємо лічильники за 1 с → об/хв
@@ -273,12 +279,52 @@ void heaterUpdate() {
   heater.voltage = readVoltage();
   digitalWrite(CHARGER_PIN, (heater.voltage < chargerThreshold) ? HIGH : LOW);
 
-  // ПІД-регулятори: отримуємо цільові оберти з таблиці
+  // ─── Автомат стану запуску/зупинки ────────────────────────────────────────
+  if (heater.state == HEATER_STARTING || heater.state == HEATER_RESTARTING) {
+    bool fired    = !isnan(heater.tempChamber) && heater.tempChamber >= (float)startFireTemp;
+    bool timedOut = (ignitionTimeMs > 0) && (now - startupStartMs >= ignitionTimeMs);
+    if (fired) {
+      heater.state = HEATER_RUNNING;
+      updateOutputs();
+    } else if (timedOut) {
+      if (heater.state == HEATER_RESTARTING) {
+        faultLog(FAULT_NO_IGNITION, 0);
+        pumpPid      = {0, 0};
+        heater.state = HEATER_STOPPING;
+      } else {
+        heater.state   = HEATER_RESTARTING;
+        startupStartMs = now;
+      }
+      updateOutputs();
+    }
+  }
+
+  if (heater.state == HEATER_STOPPING) {
+    bool cooled = !isnan(heater.tempChamber) && heater.tempChamber <= (float)coolStopTemp;
+    if (cooled) {
+      fanPid       = {0, 0};
+      heater.state = HEATER_OFF;
+      updateOutputs();
+    }
+  }
+
+  // ─── ПІД-регулятори ────────────────────────────────────────────────────────
   uint16_t fTarget = 0, pTarget = 0;
-  if (heater.state == HEATER_RUNNING || heater.state == HEATER_STARTING) {
-    uint8_t idx = heater.power - 1;
-    fTarget = POWER_TABLE[idx].fanRpm;
-    pTarget = POWER_TABLE[idx].pumpRpm;
+  switch (heater.state) {
+    case HEATER_STARTING:
+    case HEATER_RESTARTING:
+      fTarget = startFanRpm;
+      pTarget = startPumpRpm;
+      break;
+    case HEATER_RUNNING:
+      fTarget = POWER_TABLE[heater.power - 1].fanRpm;
+      pTarget = POWER_TABLE[heater.power - 1].pumpRpm;
+      break;
+    case HEATER_STOPPING:
+      fTarget = coolFanRpm;
+      pTarget = 0;
+      break;
+    default: break;
   }
   uint8_t fPwm = pidStep(fanPid,  fTarget, heater.fanRpm,  fanKp,  fanKi);
   uint8_t pPwm = pidStep(pumpPid, pTarget, heater.pumpRpm, pumpKp, pumpKi);
@@ -296,12 +342,15 @@ void heaterUpdate() {
 // ─── heaterToggle ─────────────────────────────────────────────────────────────
 void heaterToggle() {
   if (heater.state == HEATER_OFF || heater.state == HEATER_FAULT) {
-    fanPid  = {0, 0};   // скидаємо ПІД перед стартом
-    pumpPid = {0, 0};
-    heater.state = HEATER_RUNNING;   // TODO: замінити на HEATER_STARTING + реальну послідовність запуску
-  } else if (heater.state == HEATER_RUNNING || heater.state == HEATER_STARTING) {
-    heater.state = HEATER_OFF;       // TODO: замінити на HEATER_STOPPING + охолодження
-    // ШІМ скинеться на 0 при наступному heaterUpdate() через target=0
+    fanPid         = {0, 0};
+    pumpPid        = {0, 0};
+    startupStartMs = millis();
+    heater.state   = HEATER_STARTING;
+  } else if (heater.state == HEATER_RUNNING  ||
+             heater.state == HEATER_STARTING ||
+             heater.state == HEATER_RESTARTING) {
+    pumpPid      = {0, 0};  // зупиняємо насос; вентилятор продовжує через coolFanRpm
+    heater.state = HEATER_STOPPING;
   }
   updateOutputs();
 }
@@ -334,6 +383,14 @@ void heaterSetPrimingMode(uint8_t mode) {
 void heaterSetPrimingDuration(uint32_t seconds) {
   primingDurationMs = seconds * 1000UL;
 }
+
+// ─── Setter-и параметрів запуску/зупинки ──────────────────────────────────────
+void heaterSetIgnitionTime(uint32_t seconds)  { ignitionTimeMs = seconds * 1000UL; }
+void heaterSetStartFanRpm(uint16_t rpm)        { startFanRpm    = rpm; }
+void heaterSetStartPumpRpm(uint16_t rpm)       { startPumpRpm   = rpm; }
+void heaterSetStartFireTemp(uint16_t temp)     { startFireTemp  = temp; }
+void heaterSetCoolFanRpm(uint16_t rpm)         { coolFanRpm     = rpm; }
+void heaterSetCoolStopTemp(uint16_t temp)      { coolStopTemp   = temp; }
 
 // ─── heaterSetPower ───────────────────────────────────────────────────────────
 void heaterSetPower(uint8_t pwr) {

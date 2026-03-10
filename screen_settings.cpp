@@ -44,13 +44,11 @@ struct MenuItem {
 static const char UNITS_C[]   = "\xC2\xB0""C";              // °C  (2 CP)
 static const char UNITS_PCT[] = "%";
 static const char UNITS_HPA[] = "\xD0\xB3\xD0\x9F\xD0\xB0"; // гПа (3 CP)
-static const char UNITS_ML[] = "мл/г"; 
 static const char UNITS_V[] = "В"; 
 static const char UNITS_A[] = ""; 
 
 // ─── Опції для ITEM_SELECT ───────────────────────────────────────────────────
 static const char* modeOpts[]        = { "Авто ", "Нагрів", "Вентиляція" };
-static const char* resetOpts[]       = { "Літо ", "Зима" };
 static const char* primingModeOpts[] = { "Утримання", "Таймер" };
 
 // ─── Підменю "ПОТУЖНІСТЬ" (таблиця 10 ступенів) ──────────────────────────────
@@ -86,6 +84,19 @@ static const MenuItem dangerItems[] = {
 };
 static const SubMenuDef dangerSubDef = { "АВАРІЇ", dangerItems, 5 };
 
+// ─── Підменю "ЗАПУСК" ────────────────────────────────────────────────────────
+// valIdx 32..36  EEPROM addr 28, 86, 88, 90, 92  (2B кожен)
+static const MenuItem startItems[] = {
+  // label               type        valIdx  addr   min   max   default  units    data
+  { "< Назад   ",     ITEM_BACK,    NO_VAL,   0,     0,    0,    0,      nullptr, nullptr },
+  { "Вент.запуск",    ITEM_SLIDER,  32,      28,   500, 3000, 1200,      nullptr, nullptr },
+  { "Нас. запуск",    ITEM_SLIDER,  33,      86,    30,  500,   60,      nullptr, nullptr },
+  { "Темп.займ.  ",   ITEM_SLIDER,  34,      88,   100,  500,  300,      UNITS_C, nullptr },
+  { "Вент.зупин. ",   ITEM_SLIDER,  35,      90,   500, 3000, 1500,      nullptr, nullptr },
+  { "Темп.зупин. ",   ITEM_SLIDER,  36,      92,    30,  150,   80,      UNITS_C, nullptr },
+};
+static const SubMenuDef startSubDef = { "ЗАПУСК", startItems, 6 };
+
 // ─── Підменю "ПІД" ───────────────────────────────────────────────────────────
 // valIdx 16..19  EEPROM addr 38..44  (2B кожен)
 // Значення зберігаються як ×1000 цілі: 40 = Kp 0.040 [ШІМ/RPM]
@@ -104,32 +115,28 @@ static const SubMenuDef pidSubDef = { "ПІД", pidItems, 5 };
 // EEPROM map: 0(2) 2(2) 4(2) 6(4=RANGE) 10(2) 12(2) 14(4=TIME) 18(4=TIME) 22(2)
 static const MenuItem rootItems[] = {
   // label                      type         valIdx addr  min   max   default                                        units      data
-  { "Температура повітря",  ITEM_SLIDER,    0,   0,   50,  200,  110,                                               UNITS_C,   nullptr               },
-  { "Температура вихлопу",  ITEM_SLIDER,    1,   2,  120,  500,  320,                                               UNITS_C,   nullptr               },
-  { "Витрата пального",     ITEM_SLIDER,    2,   4,  500, 2500, 1300,                                               UNITS_ML,  nullptr               },
   { "Напруга живлення",     ITEM_RANGE,     3,   6,    8,   30,  (int32_t)((uint16_t)10|((uint32_t)(uint16_t)25<<16)), UNITS_V, nullptr               },
   { "Макс струм свічки",    ITEM_SLIDER,    4,  10,    5,   30,   15,                                               UNITS_A,   nullptr               },
-  { "Запуск при старті",    ITEM_CHECKBOX,  5,  12,    0,    1,    0,                                               nullptr,   nullptr               },
   { "Режим прокачки",       ITEM_SELECT,   31,  26,    0,    1,    0,                                               nullptr,   (const void*)primingModeOpts},
   { "Час прокачки",         ITEM_TIME,      6,  14,    0,    0,   10,                                               nullptr,   nullptr               },
   { "Час роботи свічки",    ITEM_TIME,      7,  18,    0,    0,   60,                                               nullptr,   nullptr               },
-  { "Сезон роботи",         ITEM_SELECT,    8,  22,    0,    1,    0,                                               nullptr,   (const void*)resetOpts},
   { "Поріг зарядки",        ITEM_SLIDER,   30,  24,    9,   14,   11,                                               UNITS_V,   nullptr               },
   { "Потужність ", ITEM_SUBMENU, NO_VAL, 0,   0,    0,    0,                                               nullptr,   &corrSubDef           },
   { "Аварії",               ITEM_SUBMENU, NO_VAL, 0,   0,    0,    0,                                               nullptr,   &dangerSubDef         },
   { "ПІД регулятор",        ITEM_SUBMENU, NO_VAL, 0,   0,    0,    0,                                               nullptr,   &pidSubDef            },
+  { "Запуск     ",          ITEM_SUBMENU, NO_VAL, 0,   0,    0,    0,                                               nullptr,   &startSubDef          },
 };
-#define ROOT_COUNT  14
+#define ROOT_COUNT  10
 
 // ─── Реєстр підменю (для saveAll/loadAll) ────────────────────────────────────
-static const SubMenuDef* allSubMenus[] = { &corrSubDef, &dangerSubDef, &pidSubDef };
-#define NUM_SUBMENUS  3
+static const SubMenuDef* allSubMenus[] = { &corrSubDef, &dangerSubDef, &pidSubDef, &startSubDef };
+#define NUM_SUBMENUS  4
 
-#define TOTAL_VALUES   32   // valIdx 0..29
+#define TOTAL_VALUES   37   // valIdx 0..36
 #define ITEMS_PER_PAGE  7
 
 #define EEPROM_MAGIC_ADDR  100
-#define EEPROM_MAGIC_VAL   0xAB
+#define EEPROM_MAGIC_VAL   0xAC
 
 // ─── Розмітка рядків (UA_ADVANCE=12, UA_ASCENT=18) ───────────────────────────
 // Row = 4px top + 22px content (ascent+descent+1) + 4px bottom = 30px total
@@ -270,6 +277,16 @@ static void loadAll() {
 // Передаємо поріг зарядки в heater.cpp
 static void applyCharger() {
   heaterSetChargerThreshold((float)values[30]);
+}
+
+// Передаємо параметри запуску/зупинки в heater.cpp
+static void applyStartup() {
+  heaterSetIgnitionTime((uint32_t)values[7]);
+  heaterSetStartFanRpm((uint16_t)values[32]);
+  heaterSetStartPumpRpm((uint16_t)values[33]);
+  heaterSetStartFireTemp((uint16_t)values[34]);
+  heaterSetCoolFanRpm((uint16_t)values[35]);
+  heaterSetCoolStopTemp((uint16_t)values[36]);
 }
 
 // Передаємо налаштування прокачки в heater.cpp
@@ -490,6 +507,7 @@ static void exitSubMenu() {
 // ─────────────────────────────────────────────────────────────────────────────
 void settingsInit() {
   loadAll();
+  applyStartup();
   applyPriming();
   applyPid();
   applyPowerTable();
@@ -607,6 +625,7 @@ void settingsUpdate() {
           editField++;
         } else {
           saveValue(item);
+          if (item->valIdx == 7 || (item->valIdx >= 32 && item->valIdx <= 36)) applyStartup();
           if (item->valIdx == 6 || item->valIdx == 31) applyPriming();
           if (item->valIdx >= 16 && item->valIdx <= 19) applyPid();
           if (item->valIdx >= 20 && item->valIdx <= 29) applyPowerTable();

@@ -77,7 +77,9 @@ static void drawStatusOverlay() {
   } else if (heater.state == HEATER_PRIMING) {
     txt = "ПРОК ";
     clr = tft.color565(0, 200, 255);
-  } else if (heater.state == HEATER_RUNNING || heater.state == HEATER_STARTING) {
+  } else if (heater.state == HEATER_RUNNING  ||
+             heater.state == HEATER_STARTING ||
+             heater.state == HEATER_RESTARTING) {
     txt = "RUN";
     clr = ST77XX_GREEN;
   } else {
@@ -99,12 +101,13 @@ static uint32_t powerEditMs   = 0;   // millis() останньої дії в р
 // ─── Стан → колір ────────────────────────────────────────────────────────────
 static uint16_t stateColor(HeaterState s) {
   switch (s) {
-    case HEATER_OFF:      return tft.color565(100, 100, 100);
-    case HEATER_STARTING: return ST77XX_YELLOW;
-    case HEATER_RUNNING:  return ST77XX_GREEN;
-    case HEATER_STOPPING: return tft.color565(255, 128, 0);
-    case HEATER_FAULT:    return ST77XX_RED;
-    case HEATER_PRIMING:  return tft.color565(0, 200, 255);
+    case HEATER_OFF:         return tft.color565(100, 100, 100);
+    case HEATER_STARTING:    return ST77XX_YELLOW;
+    case HEATER_RUNNING:     return ST77XX_GREEN;
+    case HEATER_STOPPING:    return tft.color565(255, 128, 0);
+    case HEATER_FAULT:       return ST77XX_RED;
+    case HEATER_PRIMING:     return tft.color565(0, 200, 255);
+    case HEATER_RESTARTING:  return tft.color565(255, 200, 0);
   }
   return ST77XX_WHITE;
 }
@@ -116,14 +119,15 @@ static void drawStatePower() {
 
   // Текст стану: 8cp, baseline = STAT_Y+20
   static const char* stateStr[] = {
-    "ЗУПИНЕНО",   // HEATER_OFF
-    "ЗАПУСКАЄ",   // HEATER_STARTING
-    "РОБОТА  ",   // HEATER_RUNNING
-    "ЗУПИНКА ",   // HEATER_STOPPING
-    "ПОМИЛКА ",   // HEATER_FAULT
-    "ПРОКАЧКА",   // HEATER_PRIMING
+    "ЗУПИНЕНО",   // HEATER_OFF        = 0
+    "ЗАПУСКАЄ",   // HEATER_STARTING   = 1
+    "РОБОТА  ",   // HEATER_RUNNING    = 2
+    "ЗУПИНКА ",   // HEATER_STOPPING   = 3
+    "ПОМИЛКА ",   // HEATER_FAULT      = 4
+    "ПРОКАЧКА",   // HEATER_PRIMING    = 5
+    "ПЕРЕЗАП.",   // HEATER_RESTARTING = 6
   };
-  uint8_t si = (heater.state <= HEATER_PRIMING) ? (uint8_t)heater.state : 0;
+  uint8_t si = (heater.state <= HEATER_RESTARTING) ? (uint8_t)heater.state : 0;
   tft.setCursor(4, STAT_Y + 20);
   printUAn(stateStr[si], 0, 8, stateColor(heater.state), STAT_BG);
 
@@ -132,7 +136,9 @@ static void drawStatePower() {
   tft.drawFastHLine(BAR_X, BAR_Y - 3, BAR_W, indClr);
 
   // Шкала: 10 прямокутників
-  bool    active = (heater.state == HEATER_RUNNING || heater.state == HEATER_STARTING);
+  bool    active = (heater.state == HEATER_RUNNING  ||
+                    heater.state == HEATER_STARTING ||
+                    heater.state == HEATER_RESTARTING);
   uint16_t onClr  = active ? tft.color565(0, 190, 0) : tft.color565(80, 80, 0);
   uint16_t offClr = tft.color565(30, 30, 30);
   for (uint8_t i = 0; i < 10; i++) {

@@ -9,12 +9,13 @@ enum HeaterMode : uint8_t {
 
 // ─── Стани обігрівача ─────────────────────────────────────────────────────────
 enum HeaterState : uint8_t {
-  HEATER_OFF,       // вимкнено
-  HEATER_STARTING,  // запускається
-  HEATER_RUNNING,   // працює
-  HEATER_STOPPING,  // охолодження/зупинка
-  HEATER_FAULT,     // помилка
-  HEATER_PRIMING,   // прокачка пального (кнопка BUTTON утримується)
+  HEATER_OFF,          // вимкнено
+  HEATER_STARTING,     // перша спроба запуску
+  HEATER_RUNNING,      // нормальна робота
+  HEATER_STOPPING,     // охолодження вентилятором після зупинки
+  HEATER_FAULT,        // помилка
+  HEATER_PRIMING,      // прокачка пального
+  HEATER_RESTARTING,   // друга спроба запуску (після першої невдалої)
 };
 
 // ─── Поточні дані обігрівача ──────────────────────────────────────────────────
@@ -37,7 +38,7 @@ extern HeaterData heater;
 
 void heaterSetup();
 void heaterUpdate();              // викликати в кожній ітерації loop() (non-blocking)
-void heaterToggle();              // СТАРТ якщо OFF/FAULT, СТОП якщо RUNNING/STARTING
+void heaterToggle();              // СТАРТ якщо OFF/FAULT, СТОП якщо RUNNING/STARTING/RESTARTING
 void heaterSetPower(uint8_t pwr); // 1..10
 // Оновити один ступінь таблиці потужності (з меню/EEPROM)
 void heaterSetPowerStep(uint8_t step, uint16_t fanRpm, uint16_t pumpRpm);
@@ -49,3 +50,10 @@ void heaterSetChargerThreshold(float threshV);
 void heaterSetPrimingMode(uint8_t mode);
 // Тривалість таймера прокачки (секунди)
 void heaterSetPrimingDuration(uint32_t seconds);
+// Параметри послідовності запуску/зупинки
+void heaterSetIgnitionTime(uint32_t seconds);   // тривалість роботи свічки
+void heaterSetStartFanRpm(uint16_t rpm);         // оберти вент. під час запуску
+void heaterSetStartPumpRpm(uint16_t rpm);        // оберти насоса під час запуску
+void heaterSetStartFireTemp(uint16_t temp);      // температура займання (°C)
+void heaterSetCoolFanRpm(uint16_t rpm);          // оберти вент. під час охолодження
+void heaterSetCoolStopTemp(uint16_t temp);       // температура зупинки вент. (°C)
