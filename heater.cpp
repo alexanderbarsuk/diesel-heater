@@ -86,15 +86,21 @@ static int16_t faultMaxChamber  = 310;  // °C перегрів камери
 static int16_t faultMaxAirIn    = 20;   // °C перегрів впуску
 // ACS712: 100 мВ/А, ADC 10-bit 5В → ~20.5 ADC/А; за замовч. 2А → 41 ADC
 static int16_t ignCurrentMinAdc = 41;   // мінімальний |ADC-512| для "є струм"
-static float   voltageMin      = 8.0f;
-static float   voltageMax      = 30.0f;
-static bool    faultPending    = false; // аварія під час роботи → STOPPING → FAULT
+static float    voltageMin      = 8.0f;
+static float    voltageMax      = 30.0f;
+static bool     faultPending    = false; // аварія під час роботи → STOPPING → FAULT
+static uint32_t buzzerDurationMs = 3000; // тривалість сигналу бузера (мс)
+static uint32_t buzzerEndMs      = 0;    // millis() завершення; 0 = не активний
 
 static void updateOutputs();  // forward declaration
 
 // Логує аварію і переводить обігрівач у STOPPING (або одразу FAULT якщо неактивний)
 static void triggerFault(FaultCode code, uint8_t arg = 0) {
   faultLog(code, arg);
+  if (buzzerDurationMs > 0) {
+    digitalWrite(BUZZER_PIN, HIGH);
+    buzzerEndMs = millis() + buzzerDurationMs;
+  }
   if (heater.state != HEATER_OFF  &&
       heater.state != HEATER_FAULT &&
       heater.state != HEATER_STOPPING) {
@@ -185,9 +191,11 @@ void heaterSetup() {
   pinMode(FUEL_VALVE_PIN, OUTPUT);
   pinMode(IGNITION_PIN,   OUTPUT);
   pinMode(CHARGER_PIN,    OUTPUT);
+  pinMode(BUZZER_PIN,     OUTPUT);
   digitalWrite(FUEL_VALVE_PIN, LOW);
   digitalWrite(IGNITION_PIN,   LOW);
   digitalWrite(CHARGER_PIN,    LOW);
+  digitalWrite(BUZZER_PIN,     LOW);
 
   // ШІМ виходи двигунів (вимкнено на старті)
   pinMode(FAN_PWM_PIN,  OUTPUT);
@@ -196,19 +204,19 @@ void heaterSetup() {
   analogWrite(PUMP_PWM_PIN, 0);
 
   // Кнопки режиму з LED
-  pinMode(BTN_HEAT_PIN, INPUT_PULLUP);
-  pinMode(BTN_VENT_PIN, INPUT_PULLUP);
+  pinMode(BTN_HEAT_PIN, INPUT);
+  pinMode(BTN_VENT_PIN, INPUT);
   pinMode(LED_HEAT_PIN, OUTPUT);
   pinMode(LED_VENT_PIN, OUTPUT);
   updateModeLeds();  // Нагрів активний за замовчуванням
 
   // Кнопка прокачки пального
-  pinMode(PRIMING_BTN_PIN, INPUT_PULLUP);
+  pinMode(PRIMING_BTN_PIN, INPUT);
 
   // Контактні датчики
-  pinMode(SENSOR_EMERGENCY_PIN,     INPUT_PULLUP);
-  pinMode(SENSOR_FUEL_OVERFLOW_PIN, INPUT_PULLUP);
-  pinMode(SENSOR_FUEL_MIN_PIN,      INPUT_PULLUP);
+  pinMode(SENSOR_EMERGENCY_PIN,     INPUT);
+  pinMode(SENSOR_FUEL_OVERFLOW_PIN, INPUT);
+  pinMode(SENSOR_FUEL_MIN_PIN,      INPUT);
 
   // Тахометр
   pinMode(TACH_FAN_PIN,  INPUT_PULLUP);
@@ -220,12 +228,18 @@ void heaterSetup() {
 // ─── heaterUpdate ────────────────────────────────────────────────────────────
 // Non-blocking, викликається кожен loop(). Оновлює дані раз на 1000 мс.
 void heaterUpdate() {
+  // ── Бузер: вимикаємо після закінчення тривалості ─────────────────────────
+  if (buzzerEndMs != 0 && millis() >= buzzerEndMs) {
+    digitalWrite(BUZZER_PIN, LOW);
+    buzzerEndMs = 0;
+  }
+
   // ── Прокачка: перевірка кнопки (без затримки, кожен виклик) ─────────────
-  static bool     prevBtn        = true;   // HIGH = не натиснуто (INPUT_PULLUP)
+  static bool     prevBtn        = false;  // LOW = не натиснуто (INPUT)
   static uint32_t primingStartMs = 0;
   bool btn = digitalRead(PRIMING_BTN_PIN);
   if (btn != prevBtn) {
-    if (!btn && (heater.state == HEATER_OFF || heater.state == HEATER_FAULT)) {
+    if (btn && (heater.state == HEATER_OFF || heater.state == HEATER_FAULT)) {
       // Натиснули → прокачка: насос на максимум, вентилятор стоп
       heater.state   = HEATER_PRIMING;
       heater.pumpPwm = 255;
@@ -234,7 +248,7 @@ void heaterUpdate() {
       analogWrite(FAN_PWM_PIN,  0);
       pumpPid        = {0, 0};
       primingStartMs = millis();
-    } else if (btn && heater.state == HEATER_PRIMING && primingMode == 0) {
+    } else if (!btn && heater.state == HEATER_PRIMING && primingMode == 0) {
       // Відпустили → зупинка тільки в режимі утримання
       heater.state   = HEATER_OFF;
       heater.pumpPwm = 0;
@@ -259,16 +273,16 @@ void heaterUpdate() {
   }
 
   // ── Кнопки режиму (тільки при вимкненому обігрівачі) ─────────────────────
-  static bool prevBtnHeat = true;
-  static bool prevBtnVent = true;
+  static bool prevBtnHeat = false;
+  static bool prevBtnVent = false;
   bool btnHeat = digitalRead(BTN_HEAT_PIN);
   bool btnVent = digitalRead(BTN_VENT_PIN);
   if (heater.state == HEATER_OFF || heater.state == HEATER_FAULT) {
-    if (!btnHeat && prevBtnHeat && heater.mode != MODE_HEAT) {
+    if (btnHeat && !prevBtnHeat && heater.mode != MODE_HEAT) {
       heater.mode = MODE_HEAT;
       updateModeLeds();
     }
-    if (!btnVent && prevBtnVent && heater.mode != MODE_VENT) {
+    if (btnVent && !prevBtnVent && heater.mode != MODE_VENT) {
       heater.mode = MODE_VENT;
       updateModeLeds();
     }
@@ -337,16 +351,16 @@ void heaterUpdate() {
   heater.fanRpm  = (uint16_t)((fc * 60u) / FAN_PULSES_PER_REV);
   heater.pumpRpm = (uint16_t)((pc * 60u) / PUMP_PULSES_PER_REV);
 
-  // Контактні датчики (LOW = спрацювало, INPUT_PULLUP)
-  static bool prevEmerg    = true;
-  static bool prevOverflow = true;
-  static bool prevFuelMin  = true;
+  // Контактні датчики (HIGH = спрацювало, INPUT)
+  static bool prevEmerg    = false;
+  static bool prevOverflow = false;
+  static bool prevFuelMin  = false;
   bool emerg    = digitalRead(SENSOR_EMERGENCY_PIN);
   bool overflow = digitalRead(SENSOR_FUEL_OVERFLOW_PIN);
   bool fuelMin  = digitalRead(SENSOR_FUEL_MIN_PIN);
-  if (!emerg    && prevEmerg)    triggerFault(FAULT_EMERGENCY);
-  if (!overflow && prevOverflow) triggerFault(FAULT_FUEL_OVERFLOW);
-  if (!fuelMin  && prevFuelMin)  triggerFault(FAULT_FUEL_MIN);
+  if (emerg    && !prevEmerg)    triggerFault(FAULT_EMERGENCY);
+  if (overflow && !prevOverflow) triggerFault(FAULT_FUEL_OVERFLOW);
+  if (fuelMin  && !prevFuelMin)  triggerFault(FAULT_FUEL_MIN);
   prevEmerg    = emerg;
   prevOverflow = overflow;
   prevFuelMin  = fuelMin;
@@ -525,6 +539,10 @@ void heaterSetIgnitionCurrentMin(uint8_t amperes) {
 void heaterSetVoltageRange(float vMin, float vMax) {
   voltageMin = vMin;
   voltageMax = vMax;
+}
+
+void heaterSetBuzzerDuration(uint32_t seconds) {
+  buzzerDurationMs = seconds * 1000UL;
 }
 
 // ─── heaterSetPower ───────────────────────────────────────────────────────────

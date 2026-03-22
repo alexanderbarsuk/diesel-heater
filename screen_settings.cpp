@@ -78,6 +78,7 @@ static const SubMenuDef corrSubDef = { "ПОТУЖНІСТЬ", powerItems, 11 };
 // ─── Підменю "АВАРІЇ" ────────────────────────────────────────────────────────
 // Temp thresholds: valIdx 13..15, addr 32..36 (2B кожен)
 // Ignition current: valIdx 40, addr 104 (2B)
+// Buzzer duration: valIdx 41, addr 106 (2B)
 static const MenuItem dangerItems[] = {
   // label                       type        valIdx  addr  min   max  default  units    data
   { "< Назад   ",             ITEM_BACK,    NO_VAL,   0,    0,    0,   0,      nullptr, nullptr },
@@ -85,8 +86,9 @@ static const MenuItem dangerItems[] = {
   { "Перегрів корпусу",       ITEM_SLIDER,  14,      34,  300,  500, 310,      UNITS_C, nullptr },
   { "Перегрів вихлопу",       ITEM_SLIDER,  15,      36,  300,  600, 380,      UNITS_C, nullptr },
   { "Мін.струм свічки",       ITEM_SLIDER,  40,     104,    0,   20,   2,      UNITS_A, nullptr },
+  { "Час бузера  ",           ITEM_SLIDER,  41,     106,    0,   30,   3,      UNITS_S, nullptr },
 };
-static const SubMenuDef dangerSubDef = { "АВАРІЇ", dangerItems, 5 };
+static const SubMenuDef dangerSubDef = { "АВАРІЇ", dangerItems, 6 };
 
 // ─── Підменю "ЗАПУСК" ────────────────────────────────────────────────────────
 // valIdx 32..34, 39  EEPROM addr 28, 86, 88, 102  (2B кожен)
@@ -146,11 +148,11 @@ static const MenuItem rootItems[] = {
 static const SubMenuDef* allSubMenus[] = { &corrSubDef, &dangerSubDef, &pidSubDef, &startSubDef, &stopSubDef };
 #define NUM_SUBMENUS  5
 
-#define TOTAL_VALUES   41   // valIdx 0..40
+#define TOTAL_VALUES   42   // valIdx 0..41
 #define ITEMS_PER_PAGE  7
 
 #define EEPROM_MAGIC_ADDR  100
-#define EEPROM_MAGIC_VAL   0xAF
+#define EEPROM_MAGIC_VAL   0xB0
 
 // ─── Розмітка рядків (UA_ADVANCE=12, UA_ASCENT=18) ───────────────────────────
 // Row = 4px top + 22px content (ascent+descent+1) + 4px bottom = 30px total
@@ -304,6 +306,7 @@ static void applyDanger() {
   int16_t vMax = (int16_t)((uint32_t)values[3] >> 16);
   heaterSetVoltageRange((float)vMin, (float)vMax);
   heaterSetIgnitionCurrentMin((uint8_t)values[40]);
+  heaterSetBuzzerDuration((uint32_t)values[41]);
 }
 
 // Передаємо параметри запуску/зупинки в heater.cpp

@@ -67,3 +67,4 @@ void heaterSetCoolStopTemp(uint16_t temp);
 void heaterSetFaultThresholds(int16_t maxExhaust, int16_t maxChamber, int16_t maxAirIn);
 void heaterSetIgnitionCurrentMin(uint8_t amperes);
 void heaterSetVoltageRange(float vMin, float vMax);
+void heaterSetBuzzerDuration(uint32_t seconds);

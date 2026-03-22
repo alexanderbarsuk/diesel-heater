@@ -14,7 +14,7 @@
 #define BUTTON          5    // перемикання екранів
 #define PRIMING_BTN_PIN 32   // прокачка пального
 
-// ─── Кнопки режиму з LED (INPUT_PULLUP; LOW = натиснуто) ─────────────────────
+// ─── Кнопки режиму з LED (INPUT; HIGH = натиснуто) ───────────────────────────
 #define BTN_HEAT_PIN  28
 #define LED_HEAT_PIN  29
 #define BTN_VENT_PIN  30
@@ -47,7 +47,7 @@
 #define VOLT_R1_KOHM  30
 #define VOLT_R2_KOHM  10
 
-// ─── Контактні датчики (INPUT_PULLUP; LOW = спрацювало) ──────────────────────
+// ─── Контактні датчики (INPUT; HIGH = спрацювало) ────────────────────────────
 #define SENSOR_EMERGENCY_PIN     24   // аварійний контакт
 #define SENSOR_FUEL_OVERFLOW_PIN 25   // перелів пального
 #define SENSOR_FUEL_MIN_PIN      26   // мінімум пального в баку
@@ -56,6 +56,9 @@
 #define FUEL_VALVE_PIN   8   // паливний клапан (HIGH = відкрито)
 #define IGNITION_PIN     9   // свічка запалювання (HIGH = активна)
 #define CHARGER_PIN     27   // зарядка акумулятора (HIGH = заряджати)
+
+// ─── Бузер ───────────────────────────────────────────────────────────────────
+#define BUZZER_PIN  33   // активний бузер (HIGH = звук)
 
 // ─── ШІМ виходи двигунів ─────────────────────────────────────────────────────
 #define FAN_PWM_PIN   6   // вентилятор  (ATmega2560: OC4A, Timer4)
