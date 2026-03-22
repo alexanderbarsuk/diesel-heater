@@ -9,7 +9,8 @@
 #include <math.h>
 #include <avr/pgmspace.h>
 #include <Fonts/FreeSans9pt7b.h>   // ~10px digit height — для оверлея температур
-#include "FreeSans7pt7b.h"         // ~7px digit height — для вент/насос і env блоків
+#include "FreeSans7pt7b.h"         // 2-bit AA, ~10px cap height — вент/насос і env блоки
+#include "smallprint.h"
 
 // ─── Розмітка (320×240) ──────────────────────────────────────────────────────
 // y=0..135   — фонове зображення (background.h, 136px)
@@ -347,33 +348,23 @@ static void drawEnvBlock(bool force = false) {
   tft.drawFastVLine(BOT_MID_X,  BOT_Y, BOT_H, DIVCLR);
   tft.drawFastVLine(BOT_PUMP_X, BOT_Y, BOT_H, DIVCLR);
 
-  tft.setFont(&FreeSans7pt7b);
-  tft.setTextSize(1);
-  tft.setTextColor(ST77XX_WHITE);
-
   int16_t cx = BOT_MID_X + BOT_MID_W / 2;
   // 3 рядки: ascent~10px, рівномірно у блоці 56px
   int16_t bls[3] = { (int16_t)(BOT_Y + 13), (int16_t)(BOT_Y + 31), (int16_t)(BOT_Y + 49) };
 
   auto printMid = [&](const char* s, int16_t bl) {
-    int16_t tx, ty; uint16_t tw, th;
-    tft.getTextBounds(s, 0, 0, &tx, &ty, &tw, &th);
-    tft.setCursor(cx - (int16_t)(tw / 2), bl);
-    tft.print(s);
+    uint16_t tw = smallTextWidth(&FreeSans7pt7b, s);
+    printSmall(&FreeSans7pt7b, s, cx - (int16_t)(tw / 2), bl, ST77XX_WHITE, BOT_BG);
   };
 
   // Рядок 1: температура з символом °C
   if (!isnan(t)) {
     char num[6]; itoa((int16_t)(t + 0.5f), num, 10);
-    int16_t tx, ty; uint16_t tw, th;
-    tft.getTextBounds(num, 0, 0, &tx, &ty, &tw, &th);
+    uint16_t tw = smallTextWidth(&FreeSans7pt7b, num);
     int16_t sx = cx - (int16_t)((tw + 12) / 2);  // 12px = gap+circle(5)+gap+C(5)
-    tft.setCursor(sx, bls[0]);
-    tft.print(num);
-    int16_t ax = tft.getCursorX() + 1;
+    int16_t ax = printSmall(&FreeSans7pt7b, num, sx, bls[0], ST77XX_WHITE, BOT_BG) + 1;
     tft.drawCircle(ax + 2, bls[0] - 9, 2, ST77XX_WHITE);  // superscript °
-    tft.setCursor(ax + 6, bls[0]);
-    tft.print("C");
+    printSmall(&FreeSans7pt7b, "C", ax + 6, bls[0], ST77XX_WHITE, BOT_BG);
   } else { printMid("---", bls[0]); }
 
   // Рядок 2: вологість
@@ -405,15 +396,11 @@ static void drawBottom(bool force = false) {
 
   auto drawSide = [&](uint8_t pwm, uint16_t rpm, int16_t blockX, int16_t blockCx) {
     tft.fillRect(blockX, BOT_Y, BOT_SIDE_W, BOT_H, BOT_BG);
-    tft.setFont(&FreeSans7pt7b);
-    tft.setTextSize(1);
-    tft.setTextColor(ST77XX_WHITE);
     char buf[16];
     snprintf(buf, sizeof(buf), "%u (%u%%)", rpm, (uint16_t)(pwm * 100u / 255u));
-    int16_t tx, ty; uint16_t tw, th;
-    tft.getTextBounds(buf, 0, 0, &tx, &ty, &tw, &th);
-    tft.setCursor(blockCx - (int16_t)(tw / 2), BOT_Y + BOT_H - 5);
-    tft.print(buf);
+    uint16_t tw = smallTextWidth(&FreeSans7pt7b, buf);
+    printSmall(&FreeSans7pt7b, buf, blockCx - (int16_t)(tw / 2), BOT_Y + BOT_H - 5,
+               ST77XX_WHITE, BOT_BG);
   };
 
   if (changedFan) {
@@ -455,25 +442,21 @@ static void drawBackground() {
   DRAW_BG_PART(backgroundBitmap3, 102)
 }
 
-// ─── Іконка свічки запалювання + струм під нею ───────────────────────────────
-static void drawIgnitionIcon(bool visible) {
+// ─── Іконка свічки запалювання: два кола + струм під нею ─────────────────────
+// blinkOn=true → внутрішнє коло червоне; false → чорне (вимкнене)
+static void drawIgnitionIcon(bool visible, bool blinkOn) {
   const int16_t cx = 200, cy = 90;
-  redrawBgRect(cx - 12, cy - 14, cx + 12, cy + 24); // +10px знизу для тексту
+  redrawBgRect(cx - 13, cy - 13, cx + 13, cy + 25);
   if (!visible) return;
-  uint16_t c = tft.color565(255, 50, 50);
 
-  tft.fillRect(cx-7, cy-14, 15, 5, c);   // гайка
-  tft.fillRect(cx-4, cy-9,   9, 2, c);   // перехід
-  tft.fillRect(cx-3, cy-7,   7, 8, c);   // ізолятор
-  tft.fillRect(cx-5, cy+1,  11, 4, c);   // корпус
-  tft.fillRect(cx-1, cy+5,   3, 5, c);   // центральний електрод
-  tft.fillRect(cx-5, cy+5,   2, 7, c);   // земляний електрод (вертик.)
-  tft.fillRect(cx-5, cy+11,  4, 2, c);   // земляний електрод (горизонт.)
-  tft.drawLine(cx-1, cy+13, cx+1, cy+11, c);  // іскра
-  tft.drawLine(cx-1, cy+11, cx+1, cy+13, c);
+  tft.fillCircle(cx, cy, 12, ST77XX_BLACK);
+  if (blinkOn) {
+    tft.fillCircle(cx, cy, 7, tft.color565(255, 50, 50));
+  }
 
   // Струм під іконкою
   if (!isnan(heater.ignitCurrent)) {
+    uint16_t c = tft.color565(255, 50, 50);
     tft.setFont(nullptr);
     tft.setTextSize(1);
     tft.setTextColor(c);
@@ -496,7 +479,7 @@ void sensorsInit() {
   drawTemperatureOverlay(heater.tempChamber, 120, 99);
   drawTemperatureOverlay(heater.tempAirOut,   2, 130);
   drawTemperatureOverlay(heater.tempAirIn, 260, 130);  // правий край x=280
-  drawIgnitionIcon(digitalRead(IGNITION_PIN) == HIGH);
+  drawIgnitionIcon(digitalRead(IGNITION_PIN) == HIGH, true);
   drawStatusOverlay();
   drawStatePower(true);
   tft.fillRect(0, STAT_BAR_Y, 320, 3, STAT_BG);   // порожня прогрес-смужка
@@ -569,22 +552,28 @@ void sensorsUpdate() {
     drawPowerBar();
   }
 
-  // ── Іконка запалювання + струм (оновлюємо при зміні стану або значення) ────
-  {
-    static bool    prevIgn     = false;
-    static int16_t prevIgnAmps = -1;
-    bool    ign     = digitalRead(IGNITION_PIN) == HIGH;
-    int16_t curAmps = ign && !isnan(heater.ignitCurrent)
-                      ? (int16_t)(heater.ignitCurrent + 0.5f) : -1;
-    if (ign != prevIgn || curAmps != prevIgnAmps) {
-      prevIgn = ign; prevIgnAmps = curAmps;
-      drawIgnitionIcon(ign);
-    }
+  // ── Іконка запалювання + струм ───────────────────────────────────────────
+  static bool    prevIgn     = false;
+  static int16_t prevIgnAmps = -1;
+  static bool    ignBlink    = true;
+  bool    ign     = digitalRead(IGNITION_PIN) == HIGH;
+  int16_t curAmps = ign && !isnan(heater.ignitCurrent)
+                    ? (int16_t)(heater.ignitCurrent + 0.5f) : -1;
+  if (ign != prevIgn || curAmps != prevIgnAmps) {
+    prevIgn = ign; prevIgnAmps = curAmps;
+    ignBlink = true;
+    drawIgnitionIcon(ign, ignBlink);
   }
 
   // ── Оновлення раз на 500 мс ───────────────────────────────────────────────
   if (now - lastMs >= 500) {
     lastMs = now;
+
+    // Бліп іконки свічки 2 Гц (500мс toggle)
+    if (ign) {
+      ignBlink = !ignBlink;
+      drawIgnitionIcon(true, ignBlink);
+    }
 
     // Напруга (оновлюємо якщо змінилась на ≥0.1В)
     static float prevVolt = -99.0f;

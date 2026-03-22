@@ -5,8 +5,10 @@
 #include "faults.h"
 #include "timer.h"
 #include "screen_manager.h"
+#include "clk2hz.h"
 
 void setup() {
+  clk2hzSetup();   // 2 Гц на піні 46 + ехо на 34, 35 — одразу після старту
   displaySetup();
   encoderSetup();
   heaterSetup();
@@ -20,6 +22,7 @@ void loop() {
 
   heaterUpdate();
   timerUpdate();
+  clk2hzUpdate();
 
   // ── Кнопка BUTTON — переключення екранів ──
   bool btn = digitalRead(BUTTON);
