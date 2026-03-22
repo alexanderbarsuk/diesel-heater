@@ -223,6 +223,16 @@ void heaterSetup() {
   pinMode(TACH_PUMP_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(TACH_FAN_PIN),  fanISR,  FALLING);
   attachInterrupt(digitalPinToInterrupt(TACH_PUMP_PIN), pumpISR, FALLING);
+
+  // ── Перевірка перегріву при старті (відновлення після перебою живлення) ────
+  // Читаємо температуру камери одразу; MAX6675 потребує ~250 мс після подачі живлення,
+  // тому даємо невелику затримку перед читанням.
+  delay(300);
+  float chamberOnBoot = readMAX6675(TC_CHAMBER_CS);
+  if (!isnan(chamberOnBoot) && chamberOnBoot > (float)coolStopTemp) {
+    heater.state = HEATER_STOPPING;
+    heater.tempChamber = chamberOnBoot;
+  }
 }
 
 // ─── heaterUpdate ────────────────────────────────────────────────────────────
