@@ -3,6 +3,7 @@
 #include "encoder.h"
 #include "heater.h"
 #include "faults.h"
+#include "timer.h"
 #include "screen_manager.h"
 
 void setup() {
@@ -10,7 +11,7 @@ void setup() {
   encoderSetup();
   heaterSetup();
   faultsInit();
-  pinMode(BUTTON, INPUT_PULLUP);
+  pinMode(BUTTON, INPUT_PULLUP);  // перемикання екранів
   screenManagerInit();
 }
 
@@ -18,6 +19,7 @@ void loop() {
   static bool lastBtn = HIGH;
 
   heaterUpdate();
+  timerUpdate();
 
   // ── Кнопка BUTTON — переключення екранів ──
   bool btn = digitalRead(BUTTON);

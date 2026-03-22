@@ -1,6 +1,14 @@
 #pragma once
 #include <stdint.h>
 
+// ─── Таблиця потужності (10 ступенів) ────────────────────────────────────────
+struct PowerStep {
+  uint16_t fanRpm;    // цільові оберти вентилятора
+  uint16_t pumpRpm;   // цільові оберти насоса
+};
+
+extern PowerStep POWER_TABLE[10];  // визначення у heater.cpp
+
 // ─── Режим роботи ────────────────────────────────────────────────────────────
 enum HeaterMode : uint8_t {
   MODE_HEAT = 0,  // нагрів (за замовчуванням)
@@ -26,34 +34,36 @@ struct HeaterData {
   float       tempExhaust;  // °C (NAN = немає даних)
   float       tempAirOut;   // °C (NAN = немає даних)
   float       tempAirIn;    // °C (NAN = немає даних)
-  uint8_t     fanPwm;       // ШІМ вентилятора 0..255 (задане)
-  uint8_t     pumpPwm;      // ШІМ насоса     0..255 (задане)
+  uint8_t     fanPwm;       // ШІМ вентилятора 0..255
+  uint8_t     pumpPwm;      // ШІМ насоса     0..255
   uint16_t    fanRpm;       // об/хв (виміряне)
   uint16_t    pumpRpm;      // об/хв (виміряне)
-  float       voltage;      // В (напруга живлення)
+  float       voltage;      // В
   HeaterMode  mode;         // режим: нагрів / вентиляція
+  float       ambientTemp;   // °C від AHT20
+  float       humidity;      // % від AHT20
+  float       pressure;      // гПа від BMP280
+  float       ignitCurrent;  // А від ACS712 (NAN = свічка неактивна)
 };
 
 extern HeaterData heater;
 
 void heaterSetup();
-void heaterUpdate();              // викликати в кожній ітерації loop() (non-blocking)
-void heaterToggle();              // СТАРТ якщо OFF/FAULT, СТОП якщо RUNNING/STARTING/RESTARTING
-void heaterSetPower(uint8_t pwr); // 1..10
-// Оновити один ступінь таблиці потужності (з меню/EEPROM)
+void heaterUpdate();
+void heaterToggle();
+void heaterSetPower(uint8_t pwr);
 void heaterSetPowerStep(uint8_t step, uint16_t fanRpm, uint16_t pumpRpm);
-// Оновити коефіцієнти ПІД-регуляторів (з меню/EEPROM; значення у [ШІМ/RPM])
 void heaterSetPid(float fKp, float fKi, float pKp, float pKi);
-// Встановити поріг напруги для ввімкнення зарядки (В)
 void heaterSetChargerThreshold(float threshV);
-// Режим прокачки: 0=утримання кнопки, 1=таймер
 void heaterSetPrimingMode(uint8_t mode);
-// Тривалість таймера прокачки (секунди)
 void heaterSetPrimingDuration(uint32_t seconds);
-// Параметри послідовності запуску/зупинки
-void heaterSetIgnitionTime(uint32_t seconds);   // тривалість роботи свічки
-void heaterSetStartFanRpm(uint16_t rpm);         // оберти вент. під час запуску
-void heaterSetStartPumpRpm(uint16_t rpm);        // оберти насоса під час запуску
-void heaterSetStartFireTemp(uint16_t temp);      // температура займання (°C)
-void heaterSetCoolFanRpm(uint16_t rpm);          // оберти вент. під час охолодження
-void heaterSetCoolStopTemp(uint16_t temp);       // температура зупинки вент. (°C)
+void heaterSetIgnitionTime(uint32_t seconds);
+void heaterSetStartFanRpm(uint16_t rpm);
+void heaterSetStartPumpRpm(uint16_t rpm);
+void heaterSetStartPumpDelay(uint32_t seconds);
+void heaterSetStartFireTemp(uint16_t temp);
+void heaterSetCoolFanRpm(uint16_t rpm);
+void heaterSetCoolStopTemp(uint16_t temp);
+void heaterSetFaultThresholds(int16_t maxExhaust, int16_t maxChamber, int16_t maxAirIn);
+void heaterSetIgnitionCurrentMin(uint8_t amperes);
+void heaterSetVoltageRange(float vMin, float vMax);

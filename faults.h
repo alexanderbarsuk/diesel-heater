@@ -14,6 +14,8 @@ enum FaultCode : uint8_t {
   FAULT_EMERGENCY    = 8,   // Аварійний контакт
   FAULT_FUEL_OVERFLOW= 9,   // Переліво пального
   FAULT_FUEL_MIN     = 10,  // Мінімум пального в баку
+  FAULT_OVERHEAT_AIR   = 11,  // Перегрів повітря на вході
+  FAULT_IGNITION_OPEN  = 12,  // Свічка не споживає струм (обрив/несправність)
 };
 
 struct FaultEntry {
@@ -21,7 +23,7 @@ struct FaultEntry {
   uint8_t   arg;    // додатковий контекст (напр. температура/2 для перегріву)
 };
 
-#define FAULT_LOG_MAX  7
+#define FAULT_LOG_MAX  100
 
 void        faultsInit();
 void        faultLog(FaultCode code, uint8_t arg = 0);

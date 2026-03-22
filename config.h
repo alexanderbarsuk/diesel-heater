@@ -1,86 +1,62 @@
 #pragma once
 
-#include <SPI.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_ST7789.h>
+// ─── Піни дисплея ────────────────────────────────────────────────────────────
+#define TFT_CS   53
+#define TFT_DC   48
+#define TFT_RST  49
 
-// ─── Піни дисплея ───────────────────────────────────────────────────────────
-#define TFT_CS  53
-#define TFT_DC  48
-#define TFT_RST 49
+// ─── Піни енкодера ───────────────────────────────────────────────────────────
+#define ENCODER_CLK  2
+#define ENCODER_DT   3
+#define ENCODER_SW   4
 
-// ─── Піни енкодера ──────────────────────────────────────────────────────────
-#define ENCODER_CLK 2
-#define ENCODER_DT  3
-#define ENCODER_SW  4
+// ─── Кнопки ──────────────────────────────────────────────────────────────────
+#define BUTTON          5    // перемикання екранів
+#define PRIMING_BTN_PIN 32   // прокачка пального
 
-// ─── Кнопка перемикання екранів ─────────────────────────────────────────────
-#define BUTTON 5
+// ─── Кнопки режиму з LED (INPUT_PULLUP; LOW = натиснуто) ─────────────────────
+#define BTN_HEAT_PIN  28
+#define LED_HEAT_PIN  29
+#define BTN_VENT_PIN  30
+#define LED_VENT_PIN  31
 
-// ─── Кнопка прокачки пального ───────────────────────────────────────────────
-#define PRIMING_BTN_PIN 32
-
-// ─── Кнопки режиму з вбудованими LED (INPUT_PULLUP; LOW = натиснуто) ─────────
-#define BTN_HEAT_PIN  28   // кнопка "Нагрів"
-#define LED_HEAT_PIN  29   // LED кнопки "Нагрів"
-#define BTN_VENT_PIN  30   // кнопка "Вентиляція"
-#define LED_VENT_PIN  31   // LED кнопки "Вентиляція"
-
-// ─── Термопари MAX6675 (SPI: SCK=52, MISO=50) ───────────────────────────────
-#define TC_CHAMBER_CS   10   // K-type: камера згоряння
-#define TC_EXHAUST_CS   11   // K-type: вихлоп
-#define TC_AIR_OUT_CS   12   // K-type: повітря на виході (тепле)
+// ─── Термопари MAX6675 (SPI: SCK=52, MISO=50) ────────────────────────────────
+#define TC_CHAMBER_CS  10   // K-type: камера згоряння
+#define TC_EXHAUST_CS  11   // K-type: вихлоп
+#define TC_AIR_OUT_CS  12   // K-type: повітря на виході (тепле)
 
 // ─── DS18B20 (One-Wire) ──────────────────────────────────────────────────────
-#define DS_AIR_IN_PIN   23   // повітря на вході (холодне)
+#define DS_AIR_IN_PIN  23   // повітря на вході (холодне)
 
-// ─── Тахометр (імпульсний вхід) ──────────────────────────────────────────────
-#define TACH_FAN_PIN    18   // вентилятор (INT3 на ATmega2560)
-#define TACH_PUMP_PIN   19   // паливний насос (INT2 на ATmega2560)
-#define FAN_PULSES_PER_REV  2  // імпульсів на оберт вентилятора
+// ─── Тахометр ────────────────────────────────────────────────────────────────
+#define TACH_FAN_PIN         18   // вентилятор (INT3 на ATmega2560)
+#define TACH_PUMP_PIN        19   // паливний насос (INT2 на ATmega2560)
+#define FAN_PULSES_PER_REV    2   // імпульсів на оберт вентилятора
+#define PUMP_PULSES_PER_REV   1   // імпульсів на оберт насоса
+
+// ─── ACS712 — датчик струму свічки запалювання ───────────────────────────────
+// ACS712F 20A: 2.5V (ADC≈512) = 0A; чутливість 100 мВ/А ≈ 20 ADC/А
+// Поріг спрацювання: ~0.75A → 15 ADC одиниць від центру
+#define ACS712_IGN_PIN        A1
+#define ACS712_IGN_THRESHOLD  15   // мінімальний |ADC - 512| для "є струм"
+#define ACS712_IGN_DELAY_MS  1000  // затримка після ввімкнення перед перевіркою
 
 // ─── Вимірювання напруги (дільник на A0) ─────────────────────────────────────
-// Дільник: VOLT_R1 (верхній) + VOLT_R2 (нижній, до GND)
-// Vmax = 5.0 * (R1+R2)/R2 = 5.0 * 4.0 = 20V (підходить для 12В авто)
-#define VOLT_PIN        A0
-#define VOLT_R1_KOHM    30   // кОм
-#define VOLT_R2_KOHM    10   // кОм
+// Vmax = 5.0 * (R1+R2)/R2; при R1=30кОм, R2=10кОм → Vmax=20В
+#define VOLT_PIN      A0
+#define VOLT_R1_KOHM  30
+#define VOLT_R2_KOHM  10
 
 // ─── Контактні датчики (INPUT_PULLUP; LOW = спрацювало) ──────────────────────
-#define SENSOR_EMERGENCY_PIN     24   // аварійний контакт (універсальний)
+#define SENSOR_EMERGENCY_PIN     24   // аварійний контакт
 #define SENSOR_FUEL_OVERFLOW_PIN 25   // перелів пального
 #define SENSOR_FUEL_MIN_PIN      26   // мінімум пального в баку
 
-// ─── Цифрові виходи управління ───────────────────────────────────────────────
+// ─── Виходи управління ───────────────────────────────────────────────────────
 #define FUEL_VALVE_PIN   8   // паливний клапан (HIGH = відкрито)
 #define IGNITION_PIN     9   // свічка запалювання (HIGH = активна)
-#define CHARGER_PIN     27   // керування зарядкою акумулятора (HIGH = заряджати)
+#define CHARGER_PIN     27   // зарядка акумулятора (HIGH = заряджати)
 
 // ─── ШІМ виходи двигунів ─────────────────────────────────────────────────────
-#define FAN_PWM_PIN      6   // вентилятор  (ATmega2560: OC4A, Timer4)
-#define PUMP_PWM_PIN     7   // паливний насос (ATmega2560: OC4B, Timer4)
-
-// ─── Кількість імпульсів Холла на оберт ──────────────────────────────────────
-// FAN_PULSES_PER_REV вже визначено вище (2)
-#define PUMP_PULSES_PER_REV  1   // уточнити при калібруванні
-
-// ─── Таблиця 10 ступенів потужності ──────────────────────────────────────────
-// Цільові оберти для ПІД-регуляторів (калібруються під конкретне залізо).
-// fanRpm  — об/хв вентилятора (зазвичай 1200..5000)
-// pumpRpm — об/хв насоса (для 1 імп/об: 1 Гц = 60 RPM; типово 60..420)
-struct PowerStep {
-  uint16_t fanRpm;    // цільові оберти вентилятора
-  uint16_t pumpRpm;   // цільові оберти насоса
-};
-
-// Оголошення; визначення — у heater.cpp (non-const: редагується через меню)
-extern PowerStep POWER_TABLE[10];
-
-// ─── Коефіцієнти ПІД (velocity-form PI, Ts = 1 с) ───────────────────────────
-// Вентилятор: велика інерція → малий Kp, дуже малий Ki
-#define FAN_PID_KP   0.04f   // [ШІМ/RPM]  — підбирати першим
-#define FAN_PID_KI   0.008f  // [ШІМ/RPM]  — ~5× менше Kp
-
-// Насос: менша інерція, менший діапазон RPM → більший Kp
-#define PUMP_PID_KP  0.40f   // [ШІМ/RPM]
-#define PUMP_PID_KI  0.08f   // [ШІМ/RPM]
+#define FAN_PWM_PIN   6   // вентилятор  (ATmega2560: OC4A, Timer4)
+#define PUMP_PWM_PIN  7   // паливний насос (ATmega2560: OC4B, Timer4)

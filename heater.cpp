@@ -2,12 +2,14 @@
 #include "config.h"
 #include "faults.h"
 #include <SPI.h>
+#include <Wire.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
+#include <Adafruit_AHTX0.h>
+#include <Adafruit_BMP280.h>
 #include <math.h>
 
-// ─── Таблиця 10 ступенів потужності (цільові оберти для ПІД) ─────────────────
-// Відкалібрувати: підібрати RPM так, щоб на кожному ступені горіння стале.
+// ─── Таблиця потужності (цільові оберти для ПІД) ────────────────────────────
 // Насос (1 імп/об): 60 RPM = 1 Гц, 420 RPM = 7 Гц
 PowerStep POWER_TABLE[10] = {
   {1200,  60},  //  1 — мінімум  (1 Гц насос)
@@ -32,11 +34,11 @@ struct PidCtrl {
 static PidCtrl fanPid  = {0, 0};
 static PidCtrl pumpPid = {0, 0};
 
-// Динамічні коефіцієнти (змінюються з меню через heaterSetPid)
-static float fanKp  = FAN_PID_KP;
-static float fanKi  = FAN_PID_KI;
-static float pumpKp = PUMP_PID_KP;
-static float pumpKi = PUMP_PID_KI;
+// Динамічні коефіцієнти [ШІМ/RPM] (змінюються через heaterSetPid)
+static float fanKp  = 0.04f;
+static float fanKi  = 0.008f;
+static float pumpKp = 0.40f;
+static float pumpKi = 0.08f;
 
 static uint8_t pidStep(PidCtrl& pid, uint16_t target, uint16_t measured,
                         float kp, float ki) {
@@ -55,8 +57,14 @@ static uint8_t pidStep(PidCtrl& pid, uint16_t target, uint16_t measured,
   return pid.pwm;
 }
 
+// ─── AHT20 + BMP280 ──────────────────────────────────────────────────────────
+static Adafruit_AHTX0 aht;
+static Adafruit_BMP280 bmp;
+static bool ahtOk = false;
+static bool bmpOk = false;
+
 // ─── Глобальний стан ──────────────────────────────────────────────────────────
-HeaterData heater = { HEATER_OFF, 5, NAN, NAN, NAN, NAN, 0, 0, 0, 0, 0.0f, MODE_HEAT };
+HeaterData heater = { HEATER_OFF, 5, NAN, NAN, NAN, NAN, 0, 0, 0, 0, 0.0f, MODE_HEAT, NAN, NAN, NAN, NAN };
 
 static float    chargerThreshold  = 10.5f;   // В; змінюється через heaterSetChargerThreshold()
 static uint8_t  primingMode       = 0;       // 0=утримання, 1=таймер
@@ -67,9 +75,37 @@ static uint32_t startupStartMs  = 0;      // millis() початку STARTING/RE
 static uint32_t ignitionTimeMs  = 60000;  // тривалість роботи свічки (мс)
 static uint16_t startFanRpm     = 1200;   // оберти вент. під час запуску
 static uint16_t startPumpRpm    = 60;     // оберти насоса під час запуску
+static uint32_t startPumpDelayMs = 0;     // затримка запуску насоса (мс)
 static uint16_t startFireTemp   = 300;    // температура займання (°C)
 static uint16_t coolFanRpm      = 1500;   // оберти вент. під час охолодження
 static uint16_t coolStopTemp    = 80;     // температура зупинки (°C)
+
+// ─── Пороги аварій ────────────────────────────────────────────────────────────
+static int16_t faultMaxExhaust  = 380;  // °C перегрів вихлопу
+static int16_t faultMaxChamber  = 310;  // °C перегрів камери
+static int16_t faultMaxAirIn    = 20;   // °C перегрів впуску
+// ACS712: 100 мВ/А, ADC 10-bit 5В → ~20.5 ADC/А; за замовч. 2А → 41 ADC
+static int16_t ignCurrentMinAdc = 41;   // мінімальний |ADC-512| для "є струм"
+static float   voltageMin      = 8.0f;
+static float   voltageMax      = 30.0f;
+static bool    faultPending    = false; // аварія під час роботи → STOPPING → FAULT
+
+static void updateOutputs();  // forward declaration
+
+// Логує аварію і переводить обігрівач у STOPPING (або одразу FAULT якщо неактивний)
+static void triggerFault(FaultCode code, uint8_t arg = 0) {
+  faultLog(code, arg);
+  if (heater.state != HEATER_OFF  &&
+      heater.state != HEATER_FAULT &&
+      heater.state != HEATER_STOPPING) {
+    faultPending = true;
+    pumpPid      = {0, 0};
+    heater.state = HEATER_STOPPING;
+    updateOutputs();
+  } else if (heater.state != HEATER_STOPPING) {
+    heater.state = HEATER_FAULT;
+  }
+}
 
 static float readVoltage() {
   uint16_t sum = 0;
@@ -126,6 +162,12 @@ static void updateOutputs() {
 
 // ─── heaterSetup ─────────────────────────────────────────────────────────────
 void heaterSetup() {
+  // AHT20 + BMP280 (I2C: SDA=20, SCL=21)
+  Wire.begin();
+  ahtOk = aht.begin();
+  bmpOk = bmp.begin(0x76);
+  if (!bmpOk) bmpOk = bmp.begin(0x77);
+
   // CS піни MAX6675
   pinMode(TC_CHAMBER_CS, OUTPUT);
   pinMode(TC_EXHAUST_CS, OUTPUT);
@@ -236,6 +278,30 @@ void heaterUpdate() {
 
   if (heater.state == HEATER_PRIMING) return;
 
+  // ── Перевірка струму свічки через ACS712_IGN_DELAY_MS після ввімкнення ──────
+  // Виконується кожен loop() — не блокується 1-секундним гейтом
+  {
+    static bool ignCurrentChecked = false;
+    bool ignActive = (heater.state == HEATER_STARTING ||
+                      heater.state == HEATER_RESTARTING) &&
+                     (ignitionTimeMs == 0 ||
+                      millis() - startupStartMs < ignitionTimeMs);
+    if (!ignActive) {
+      ignCurrentChecked = false;  // скидаємо при вимкненні свічки
+    } else if (!ignCurrentChecked &&
+               millis() - startupStartMs >= ACS712_IGN_DELAY_MS) {
+      ignCurrentChecked = true;
+      if (ignCurrentMinAdc > 0) {
+        int16_t raw   = (int16_t)analogRead(ACS712_IGN_PIN);
+        int16_t delta = raw - 512;
+        if (delta < 0) delta = -delta;
+        if (delta < ignCurrentMinAdc) {
+          triggerFault(FAULT_IGNITION_OPEN);
+        }
+      }
+    }
+  }
+
   static uint32_t lastMs = 0;
   uint32_t now = millis();
   if (now - lastMs < 1000) return;
@@ -245,6 +311,17 @@ void heaterUpdate() {
   heater.tempChamber = readMAX6675(TC_CHAMBER_CS);
   heater.tempExhaust = readMAX6675(TC_EXHAUST_CS);
   heater.tempAirOut  = readMAX6675(TC_AIR_OUT_CS);
+
+  // AHT20 + BMP280
+  if (ahtOk) {
+    sensors_event_t hum, temp;
+    aht.getEvent(&hum, &temp);
+    heater.ambientTemp = temp.temperature;
+    heater.humidity    = hum.relative_humidity;
+  }
+  if (bmpOk) {
+    heater.pressure = bmp.readPressure() / 100.0f;   // Па → гПа
+  }
 
   // DS18B20: читаємо попередню конвертацію, запускаємо нову
   float t = dsIn.getTempCByIndex(0);
@@ -267,21 +344,58 @@ void heaterUpdate() {
   bool emerg    = digitalRead(SENSOR_EMERGENCY_PIN);
   bool overflow = digitalRead(SENSOR_FUEL_OVERFLOW_PIN);
   bool fuelMin  = digitalRead(SENSOR_FUEL_MIN_PIN);
-  if (!emerg    && prevEmerg)    { faultLog(FAULT_EMERGENCY);     heater.state = HEATER_FAULT; }
-  if (!overflow && prevOverflow) { faultLog(FAULT_FUEL_OVERFLOW); heater.state = HEATER_FAULT; }
-  if (!fuelMin  && prevFuelMin)  { faultLog(FAULT_FUEL_MIN);      heater.state = HEATER_FAULT; }
+  if (!emerg    && prevEmerg)    triggerFault(FAULT_EMERGENCY);
+  if (!overflow && prevOverflow) triggerFault(FAULT_FUEL_OVERFLOW);
+  if (!fuelMin  && prevFuelMin)  triggerFault(FAULT_FUEL_MIN);
   prevEmerg    = emerg;
   prevOverflow = overflow;
   prevFuelMin  = fuelMin;
-  updateOutputs();  // клапан і свічка реагують на зміну стану негайно
 
   // Напруга живлення та керування зарядкою
   heater.voltage = readVoltage();
   digitalWrite(CHARGER_PIN, (heater.voltage < chargerThreshold) ? HIGH : LOW);
 
+  // ACS712: струм свічки (оновлюємо тільки коли активна)
+  bool ignNow = (heater.state == HEATER_STARTING || heater.state == HEATER_RESTARTING) &&
+                (ignitionTimeMs == 0 || now - startupStartMs < ignitionTimeMs);
+  if (ignNow) {
+    int16_t raw   = (int16_t)analogRead(ACS712_IGN_PIN);
+    int16_t delta = raw - 512;
+    if (delta < 0) delta = -delta;
+    heater.ignitCurrent = (float)delta / 20.5f;
+  } else {
+    heater.ignitCurrent = NAN;
+  }
+
+  // ─── Перевірка аварій (тільки під час активної роботи) ───────────────────
+  bool isActive = (heater.state == HEATER_RUNNING   ||
+                   heater.state == HEATER_STARTING  ||
+                   heater.state == HEATER_RESTARTING);
+  if (isActive) {
+    if (!isnan(heater.tempExhaust) && heater.tempExhaust > (float)faultMaxExhaust)
+      triggerFault(FAULT_OVERHEAT_EXH, (uint8_t)((uint16_t)heater.tempExhaust >> 1));
+    else if (!isnan(heater.tempChamber) && heater.tempChamber > (float)faultMaxChamber)
+      triggerFault(FAULT_OVERHEAT_CHM, (uint8_t)((uint16_t)heater.tempChamber >> 1));
+    else if (!isnan(heater.tempAirIn) && heater.tempAirIn > (float)faultMaxAirIn)
+      triggerFault(FAULT_OVERHEAT_AIR);
+    else if (heater.voltage < voltageMin)
+      triggerFault(FAULT_LOW_VOLTAGE);
+    else if (heater.voltage > voltageMax)
+      triggerFault(FAULT_OVERVOLTAGE);
+  }
+
+  // Занизька температура вихлопу під час RUNNING → RESTARTING (згасла полум'я)
+  if (heater.state == HEATER_RUNNING &&
+      !isnan(heater.tempExhaust) &&
+      heater.tempExhaust < (float)startFireTemp) {
+    heater.state   = HEATER_RESTARTING;
+    startupStartMs = now;
+    updateOutputs();
+  }
+
   // ─── Автомат стану запуску/зупинки ────────────────────────────────────────
   if (heater.state == HEATER_STARTING || heater.state == HEATER_RESTARTING) {
-    bool fired    = !isnan(heater.tempChamber) && heater.tempChamber >= (float)startFireTemp;
+    bool fired    = !isnan(heater.tempExhaust) && heater.tempExhaust >= (float)startFireTemp;
     bool timedOut = (ignitionTimeMs > 0) && (now - startupStartMs >= ignitionTimeMs);
     if (fired) {
       heater.state = HEATER_RUNNING;
@@ -303,7 +417,8 @@ void heaterUpdate() {
     bool cooled = !isnan(heater.tempChamber) && heater.tempChamber <= (float)coolStopTemp;
     if (cooled) {
       fanPid       = {0, 0};
-      heater.state = HEATER_OFF;
+      heater.state = faultPending ? HEATER_FAULT : HEATER_OFF;
+      faultPending = false;
       updateOutputs();
     }
   }
@@ -314,7 +429,8 @@ void heaterUpdate() {
     case HEATER_STARTING:
     case HEATER_RESTARTING:
       fTarget = startFanRpm;
-      pTarget = startPumpRpm;
+      pTarget = (startPumpDelayMs == 0 || (now - startupStartMs) >= startPumpDelayMs)
+                ? startPumpRpm : 0;
       break;
     case HEATER_RUNNING:
       fTarget = POWER_TABLE[heater.power - 1].fanRpm;
@@ -344,6 +460,7 @@ void heaterToggle() {
   if (heater.state == HEATER_OFF || heater.state == HEATER_FAULT) {
     fanPid         = {0, 0};
     pumpPid        = {0, 0};
+    faultPending   = false;
     startupStartMs = millis();
     heater.state   = HEATER_STARTING;
   } else if (heater.state == HEATER_RUNNING  ||
@@ -385,12 +502,30 @@ void heaterSetPrimingDuration(uint32_t seconds) {
 }
 
 // ─── Setter-и параметрів запуску/зупинки ──────────────────────────────────────
-void heaterSetIgnitionTime(uint32_t seconds)  { ignitionTimeMs = seconds * 1000UL; }
-void heaterSetStartFanRpm(uint16_t rpm)        { startFanRpm    = rpm; }
-void heaterSetStartPumpRpm(uint16_t rpm)       { startPumpRpm   = rpm; }
+void heaterSetIgnitionTime(uint32_t seconds)   { ignitionTimeMs   = seconds * 1000UL; }
+void heaterSetStartFanRpm(uint16_t rpm)        { startFanRpm      = rpm; }
+void heaterSetStartPumpRpm(uint16_t rpm)       { startPumpRpm     = rpm; }
+void heaterSetStartPumpDelay(uint32_t seconds) { startPumpDelayMs = seconds * 1000UL; }
 void heaterSetStartFireTemp(uint16_t temp)     { startFireTemp  = temp; }
 void heaterSetCoolFanRpm(uint16_t rpm)         { coolFanRpm     = rpm; }
 void heaterSetCoolStopTemp(uint16_t temp)      { coolStopTemp   = temp; }
+
+// ─── heaterSetFaultThresholds / heaterSetVoltageRange ────────────────────────
+void heaterSetFaultThresholds(int16_t maxExhaust, int16_t maxChamber, int16_t maxAirIn) {
+  faultMaxExhaust = maxExhaust;
+  faultMaxChamber = maxChamber;
+  faultMaxAirIn   = maxAirIn;
+}
+
+void heaterSetIgnitionCurrentMin(uint8_t amperes) {
+  // ACS712F 20A: 100 мВ/А; ADC 10-bit, Vref=5В → 1А ≈ 20.5 ADC одиниці
+  ignCurrentMinAdc = (int16_t)amperes * 205 / 10;
+}
+
+void heaterSetVoltageRange(float vMin, float vMax) {
+  voltageMin = vMin;
+  voltageMax = vMax;
+}
 
 // ─── heaterSetPower ───────────────────────────────────────────────────────────
 void heaterSetPower(uint8_t pwr) {

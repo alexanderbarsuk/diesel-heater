@@ -2,14 +2,14 @@
 #include <EEPROM.h>
 
 // EEPROM layout:
-//   200..213 — 7 слотів × 2 байти (code, arg)  — кільцевий буфер
-//   214      — кількість записів (0..FAULT_LOG_MAX)
-//   215      — head: індекс найстарішого запису (0..FAULT_LOG_MAX-1)
-//   216      — seed magic (0xB2 = тестові помилки вже додано)
+//   200..399 — 100 слотів × 2 байти (code, arg) — кільцевий буфер
+//   400      — кількість записів (0..FAULT_LOG_MAX)
+//   401      — head: індекс найстарішого запису (0..FAULT_LOG_MAX-1)
+//   402      — seed magic (0xB2 = тестові помилки вже додано)
 #define FAULT_EEPROM_BASE  200
-#define FAULT_COUNT_ADDR   214
-#define FAULT_HEAD_ADDR    215
-#define FAULT_SEEDED_ADDR  216
+#define FAULT_COUNT_ADDR   400
+#define FAULT_HEAD_ADDR    401
+#define FAULT_SEEDED_ADDR  402
 
 static uint8_t _count = 0;
 static uint8_t _head  = 0;   // індекс найстарішого запису в кільці
@@ -76,7 +76,9 @@ const char* faultShortName(FaultCode code) {
     case FAULT_EMERGENCY:    return "Е:КОН";
     case FAULT_FUEL_OVERFLOW:return "Е:ПЕР";
     case FAULT_FUEL_MIN:     return "Е:БАК";
-    default:                 return "Е:???";
+    case FAULT_OVERHEAT_AIR:  return "Е:ВПС";
+    case FAULT_IGNITION_OPEN: return "Е:СВЧ";
+    default:                  return "Е:???";
   }
 }
 
@@ -90,8 +92,10 @@ const char* faultName(FaultCode code) {
     case FAULT_LOW_VOLTAGE:  return "НИЗЬКА НАПРУГА";
     case FAULT_OVERVOLTAGE:  return "ВИСОКА НАПРУГА";
     case FAULT_EMERGENCY:    return "АВАРІЙНИЙ КОНТАКТ";
-    case FAULT_FUEL_OVERFLOW:return "ПЕРЕЛІВО ПАЛЬНОГО";
+    case FAULT_FUEL_OVERFLOW:return "ПЕРЕЛИВ ПАЛЬНОГО";
     case FAULT_FUEL_MIN:     return "МІНІМУМ ПАЛЬНОГО";
-    default:                 return "НЕВІДОМА ПОМИЛКА";
+    case FAULT_OVERHEAT_AIR:  return "ПЕРЕГРІВ ВПУСКУ";
+    case FAULT_IGNITION_OPEN: return "ОБРИВ СВІЧКИ";
+    default:                  return "НЕВІДОМА ПОМИЛКА";
   }
 }
